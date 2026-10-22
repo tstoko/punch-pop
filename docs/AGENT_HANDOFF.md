@@ -2,26 +2,27 @@
 
 Updated 23 October 2026. Start with this file and the root README. The repository contains the complete Godot source and test evidence; no account or backend is required to play.
 
+## Latest owner feedback
+
+The owner approved publishing v0.5 as-is with comments. Read [the playtest critique](v5-design-critique.md) before future design work: fuller-cut bonuses, streaks between rows, progressive difficulty, an exploratory bomb and, especially, fiddly mouse/phone selection. These are recorded proposals, not implemented features.
+
 ## Current state
 
-The implemented build is **0.4.0**, a native portrait Godot 4.5.1 game written in GDScript. It is playable on the user's Mac. An Android export preset exists, but no APK or physical-device QA has been completed. This is not a web game.
+The implemented build is **0.5.0**, a native portrait Godot 4.5.1 game. Read [v0.5 build notes](v5-build-notes.md). Android export exists, but physical-device QA and commercial validation remain.
 
-The user wants a satisfying, replayable puzzle game with the polish and appeal of leading block games. They liked the new dark arcade artwork, then reported that automatic clearing was confusing and survival too easy. Version 0.3 clarified clears and replaced pastel smiling blocks with faceless bevelled blocks. Version 0.4 added real time pressure and harder supply.
+The latest request authorized a team-led improvement of aesthetics and gameplay. The implemented pass replaces dual pressure with one visible timed rise, varies endless openings, preserves clear match explanations, adds score milestones, and improves tiles, cutter cards, effects and sound.
 
-## Actual rules in 0.4
+## Actual rules in 0.5
 
-- Board: 7 columns × 9 rows; four colours. Three colour-specific cutters: corner, line, square.
-- A cut must remove at least two blocks of the cutter's colour. Other colours inside the footprint stay.
-- Gravity settles the board. Orthogonally connected same-colour groups of four or more clear automatically; subsequent falling matches form chains. Full rows and diagonals have no separate clearing rule.
-- Direct cuts score 10 per block. Automatic matches score 20 × cascade-wave number per block. Each cascade sequence begins at wave 1.
-- A cumulative decision clock begins at 8 seconds. Expiry inserts the previewed row at the bottom and lifts all existing blocks one cell. Any existing top-row block prevents insertion and ends the run atomically.
-- Cuts do not reset the timer. Menus, animations, training and app focus loss pause it. No offline catch-up occurs. Long frame stalls do not queue unseen rises.
-- Pressure level is the greater of one level per 12 cuts or per 20 active seconds, capped at 8. Each level shortens the next clock interval by 0.75 seconds, down to 3.5 seconds. The current interval finishes normally.
-- Move pressure ALSO inserts rows: every two cuts initially; every cut from cut 24; two rows on every third cut from cut 48. Upcoming double rises are labelled in the HUD.
-- Sparse-board refills target 14 blocks, stop early for tall boards, and recover legal moves. Preview generation avoids immediate automatic clears on the current board. Intervening cuts may still create a row-assisted match.
-- Default input is tap-to-snap. Optional Aim exposes exact top-left cutter origins. Hover/hold predicts direct and cascade points before supply.
-- One-step undo restores a cut and its random future but never refunds thinking time. A timed rise invalidates undo. Undo works after cut-caused overflow, not timer death.
-- Three untimed authored lessons and a repeated deliberate-chain endless opening teach the rules. Tray chain badges currently reveal available multi-wave opportunities.
+- Board: 7 × 9, four colours, three colour-specific cutter cards. A cut removes at least two blocks of its own colour.
+- Gravity settles blocks. Four or more same-colour orthogonal neighbours automatically clear. Further waves multiply match points. Direct cuts award 10 per block; automatic waves award 20 × wave per block.
+- The cumulative decision clock starts at eight seconds. Expiry pushes a previewed bottom row upward; a block already at the top causes atomic loss. Cuts never reset the clock or schedule rows.
+- Pressure level increases each 12 cuts or 20 active seconds, capped at eight. Future clock intervals shorten to 3.5 seconds. Menus, animation, training and focus loss pause time.
+- Replenishment occurs only when no legal cutter exists. Sparse playable boards remain sparse, giving successful cuts value.
+- Endless openings vary by seed; the fixed authored chain pocket is training-only. Automatic tray chain hints are training-only, but selected-move forecasts remain.
+- Score milestone UI and celebrations start at 500, then 1,000, 2,000, 3,500, 5,000 and every 2,500 thereafter. These are presentation goals, not score bonuses.
+- One-step undo restores cut state and RNG but never thinking time. Timed rises clear undo. Resume preserves completed state and partial time without offline catch-up.
+- Reduced motion, strong colours, audio, haptics, help and three untimed lessons remain available.
 
 ## Architecture and persistence
 
@@ -53,24 +54,9 @@ From the repository root:
 
 The shell launchers use Bash for macOS/Linux portability. Windows agents can invoke Godot directly: import with `godot --headless --path . --editor --import --quit`, then run `godot --headless --path . --script res://tests/test_runner.gd`. Check for engine script errors as well as the completion marker: Godot can return zero after a script error. `tools/test.sh` enforces both.
 
-Latest validated results:
+Latest validated results are documented in `docs/v5-build-notes.md`, `docs/v5-render-audit.json`, `docs/v5-pressure-audit.json` and `docs/v5-runtime-smoke.json`. The main suite passed 9,205 checks. Old v4 reports are historical.
 
-- Main suite: **4,653 checks, zero failures**. Counts can vary with how long randomized controller scenarios survive.
-- Real frame-clock test: **13 checks, zero failures**. It pauses, saves a partially consumed clock, cold-reloads behind Continue, then reaches timer death after 24 active seconds with zero cuts and zero points.
-- Pressure audit: **200 seeded sessions**, no stuck runs and no runs reaching the 150-cut cap. At three seconds per decision, medians are 10 cuts random, 17 score seeking, and 25 height aware. See `docs/v4-pressure-audit.json` and `docs/v4-runtime-smoke.json`.
-- Desktop renderer: board and tray fit 360×640, 390×844 and 768×1024. These are desktop checks, not phone performance or retention evidence.
-
-Graphical capture tools (`tools/capture.gd` and `tools/render_audit.gd`) open native windows and use isolated Mac `/private/tmp` saves. Adapt those paths when running elsewhere. `next_balance.gd` aliases the current pressure audit. Older audit files and v0.2/v0.3 notes are historical; they do not describe current rules.
-
-## Latest design critique — proposed, NOT implemented
-
-After 0.4, the user asked what would improve the game. The assistant's assessment was that difficulty had improved faster than depth. It proposed:
-
-1. Simplify to ONE timed bottom-rise pressure system, removing move-based rises and keeping restocks only when play would otherwise stop.
-2. Make cutter outcomes clearer, phase out automatic chain hints after training, and vary fair opening boards.
-3. Give planned chains stronger audiovisual payoff while ordinary cuts stay fast; reduce small technical UI labels.
-
-These are proposals, not changes already made. The current request was to publish the project for another agent. The next agent should use the user's next instructions to select the design work rather than assume these proposals are approved implementation requirements. Preserve the clear four-block explanations while improving the loop. Do not claim commercial superiority or human retention based on bots.
+Graphical audit/capture tools use isolated temporary saves. They open windows and must obey the desktop preference below. Bots and desktop frame timings do not demonstrate human retention or phone performance.
 
 ## User workflow preference
 

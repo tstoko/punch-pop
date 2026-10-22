@@ -3,12 +3,12 @@ extends Node2D
 
 const COLORS := EffectsManager.COLORS
 const COLOR_NAMES := ["ORANGE", "BLUE", "GREEN", "VIOLET"]
-const INK := Color("edf5ff")
-const MUTED := Color("91a6c5")
-const ACCENT := Color("63b6ff")
-const BG := Color("111d33")
-const PANEL := Color("1c2e49")
-const EDGE := Color("2c4363")
+const INK := Color("f3f5ff")
+const MUTED := Color("99a8c4")
+const ACCENT := Color("7ad9ff")
+const BG := Color("0d1327")
+const PANEL := Color("19243c")
+const EDGE := Color("30405d")
 const BOARD_POS := Vector2(60, 276)
 const CELL := 60.0
 var game: Node2D
@@ -47,19 +47,19 @@ func head(value: String, at: Vector2, size: int, color: Color = INK, align: int 
 func block_color(index: int) -> Color:
 	return [Color("ffae65"), Color("78c0ff"), Color("62e8b7"), Color("c4a8ff")][index] if game.save.high_contrast else COLORS[index]
 
-# Original bevelled blocks. Corners identify colours independently of hue.
+# Soft, tactile tiles with a recessed base and a crisp lit face. Corners identify colours independently of hue.
 func block(rect: Rect2, index: int, small: bool = false, alpha: float = 1) -> void:
 	if rect.size.x < 3:
 		return
 	var color = block_color(index)
 	color.a = alpha
-	var r = 3 if small else 7
+	var r = 4 if small else 10
 	box(Rect2(rect.position + Vector2(0, 3), rect.size), Color(0, 0, 0, alpha * .23), r)
-	box(rect, color.darkened(.42), r)
+	box(rect, color.darkened(.48), r)
 	var face = Rect2(rect.position + Vector2(2, 1), rect.size - Vector2(4, 5 if not small else 3))
 	box(face, color, maxi(2, r - 2))
 	var lift = 3 if small else 5
-	box(Rect2(face.position + Vector2(1, 1), Vector2(face.size.x - 2, lift)), Color(1, 1, 1, alpha * .25), 2)
+	box(Rect2(face.position + Vector2(1, 1), Vector2(face.size.x - 2, lift)), Color(1, 1, 1, alpha * .33), 2)
 	draw_line(face.position + Vector2(1, lift), face.position + Vector2(1, face.size.y - 2), Color(1, 1, 1, alpha * .15), 1, true)
 	draw_line(face.end - Vector2(1, 2), face.position + Vector2(face.size.x - 1, lift), Color(0, 0, 0, alpha * .12), 2, true)
 	if not small and rect.size.x > 30:
@@ -73,11 +73,21 @@ func block(rect: Rect2, index: int, small: bool = false, alpha: float = 1) -> vo
 				draw_line(mark - Vector2(0, 3), mark + Vector2(0, 3), tint, 1.8, true)
 			3: draw_colored_polygon(PackedVector2Array([mark + Vector2(0, -4), mark + Vector2(3.5, 0), mark + Vector2(0, 4), mark + Vector2(-3.5, 0)]), tint)
 
-func _draw() -> void:
+func draw_backdrop() -> void:
 	draw_rect(Rect2(-game.position - Vector2(100, 100), get_viewport_rect().size + Vector2(200, 200)), BG)
+	# Broad, static ambient pools give depth without competing with the puzzle.
+	for i in range(7, 0, -1):
+		draw_circle(Vector2(65, 260), float(i * 55), Color(.22, .28, .62, .015), true, -1, true)
+		draw_circle(Vector2(510, 890), float(i * 42), Color(.12, .40, .51, .012), true, -1, true)
+	for y in range(114, 1060, 30):
+		draw_circle(Vector2(27, y), 1, Color(ACCENT, .10), true, -1, true)
+		draw_circle(Vector2(513, y), 1, Color(ACCENT, .10), true, -1, true)
+
+func _draw() -> void:
+	draw_backdrop()
 	head("PUNCH", Vector2(60, 67), 39)
 	head("POP", Vector2(157, 67), 39, ACCENT)
-	label("COLOUR  /  GRAVITY  /  CHAINS", Vector2(61, 86), 9, MUTED)
+	label("MAKE SPACE.  MAKE CHAINS.", Vector2(61, 86), 9, MUTED)
 	for x in [382, 436]:
 		box(Rect2(x, 30, 44, 44), PANEL, 9, EDGE, 1)
 	head("?", Vector2(404, 60), 25, MUTED, 1)
@@ -87,7 +97,7 @@ func _draw() -> void:
 	label("SCORE", Vector2(60, 111), 9, MUTED)
 	head(str(game.score), Vector2(58, 155), 55 if game.score < 10000000 else 40)
 	var descriptor = "TRAINING %d/3" % game.tutorial if game.tutorial > 0 else "LEVEL %02d" % SupplySystem.pressure_level(game.turns, game.model.active_seconds)
-	box(Rect2(243, 118, 103, 30), PANEL, 5)
+	box(Rect2(243, 118, 103, 30), PANEL, 15, EDGE, 1)
 	head(descriptor, Vector2(294, 140), 17, ACCENT, 1)
 	label("BEST", Vector2(480, 111), 9, MUTED, 2)
 	head(str(game.save.best), Vector2(480, 148), 32 if game.save.best < 1000000000 else 24, Color("ffbd65"), 2)
@@ -134,17 +144,20 @@ func draw_instruction() -> void:
 	label(detail, Vector2(60, 210), 14, MUTED)
 
 func draw_flow() -> void:
-	var stages = ["cut", "fall", "match", "supply"]
-	var captions = ["1  CUT 2+", "2  FALL", "3  MATCH 4+", "4  RISE ↑"]
-	for i in 4:
+	var stages = ["cut", "fall", "match"]
+	var captions = ["1  CUT 2+", "2  BLOCKS FALL", "3  MATCH 4+"]
+	for i in 3:
 		var active = game.phase == stages[i] or (game.phase == "idle" and i == 0)
-		var rect = Rect2(60 + i * 106, 221, 102, 23)
-		box(rect, Color("233f60") if active else Color("182940"), 4, ACCENT if active else Color.TRANSPARENT, 1 if active else 0)
+		var rect = Rect2(60 + i * 142, 221, 136, 23)
+		box(rect, Color("21374e") if active else Color("131e34"), 6, Color(ACCENT, .35) if active else Color.TRANSPARENT, 1 if active else 0)
 		head(captions[i], Vector2(rect.get_center().x, 237), 14, INK if active else MUTED, 1)
 
 func draw_board() -> void:
 	var origin = BOARD_POS + game.screen_board_offset
-	box(Rect2(origin - Vector2(10, 10), Vector2(440, 560)), Color("080f1f"), 13, EDGE, 1)
+	box(Rect2(origin - Vector2(14, 4), Vector2(448, 564)), Color(0, 0, 0, .28), 20)
+	box(Rect2(origin - Vector2(11, 11), Vector2(442, 562)), Color("1e304b"), 16, Color("40516c"), 1)
+	box(Rect2(origin - Vector2(7, 7), Vector2(434, 554)), Color("0a1022"), 12)
+	draw_line(origin + Vector2(9, -10), origin + Vector2(411, -10), Color(ACCENT, .22), 1, true)
 	var moving = {}
 	for movement in game.movements:
 		moving[movement.to] = true
@@ -154,12 +167,12 @@ func draw_board() -> void:
 		for x in 7:
 			var p = Vector2i(x, y)
 			var rect = Rect2(origin + Vector2(p) * CELL + Vector2(3, 3), Vector2(54, 54))
-			box(rect, Color("1b2d48") if (x + y) % 2 == 0 else Color("192a43"), 6)
+			box(rect, Color("142139") if (x + y) % 2 == 0 else Color("121e34"), 9)
 			if game.board.at(p) >= 0 and not moving.has(p):
 				var tile = rect
 				if game.row_rising:
 					tile.position.y -= CELL * game.rise_t
-				var opacity = 1.0
+				var opacity = .76 if interactive and not game.tray[game.selected].is_empty() and game.board.at(p) != game.tray[game.selected].color else 1.0
 				if game.shrinking.has(p):
 					tile = rect.grow(-rect.size.x * game.anim_t * .45)
 					opacity = 1 - game.anim_t
@@ -171,7 +184,7 @@ func draw_board() -> void:
 					tile.size.y -= 54 * s
 				block(tile, game.board.at(p), false, opacity)
 				if interactive and game.targets.has(p) and not game.precise:
-					box(rect.grow(1), Color.TRANSPARENT, 7, Color(1, 1, 1, .52), 1)
+					box(rect.grow(1), Color.TRANSPARENT, 10, Color(1, 1, 1, .55), 1)
 				if preview_hits.has(p) or (game.phase == "cut" and game.anticipating.has(p)):
 					box(rect.grow(1), Color(1, 1, 1, .08), 7, Color.WHITE, 2)
 					draw_check(rect.position + Vector2(43, 42))
@@ -234,7 +247,7 @@ func draw_incoming() -> void:
 	box(Rect2(152, 252, 240, 6), Color("263d59"), 3)
 	box(Rect2(152, 252, 240 * clampf(remaining / game.model.rise_period, 0, 1), 6), urgency if active else MUTED, 3)
 	head("%.1fs" % remaining, Vector2(480, 262), 20, urgency if active else MUTED, 2)
-	box(Rect2(50, 821, 440, 21), Color("223d59"), 4, urgency if remaining <= 3 else EDGE, 1)
+	box(Rect2(50, 821, 440, 21), Color("172b40"), 5, urgency if remaining <= 3 else EDGE, 1)
 	head("↑", Vector2(501, 838), 22, urgency, 1)
 	var danger := false
 	for x in 7:
@@ -253,7 +266,7 @@ func draw_tray_caption() -> void:
 		label("RESOLVING MOVE", Vector2(60, 855), 10, MUTED)
 	elif not game.last_summary.is_empty():
 		var r = game.last_summary
-		label("TIME UP" if r.timer_rows > 0 else "LAST MOVE", Vector2(60, 855), 9, MUTED)
+		label("ROW ADDED" if r.timer_rows > 0 else "LAST MOVE", Vector2(60, 855), 9, MUTED)
 		var receipt = "+1 bottom row  ·  clear below the ceiling" if r.timer_rows > 0 and r.matched == 0 else "%d cut  ·  %d auto-cleared  ·  +%d" % [r.cut, r.matched, r.score]
 		label(receipt, Vector2(480, 855), 11, INK, 2)
 	else:
@@ -267,9 +280,13 @@ func draw_cutter(i: int) -> void:
 	var rect = Rect2(60 + i * 144, 862, 132, 136)
 	var color = block_color(cutter.color)
 	var active = game.selected == i
-	box(rect, Color("213b57") if active else PANEL, 9, color if active else EDGE, 2 if active else 1)
+	box(Rect2(rect.position + Vector2(0, 5), rect.size), Color(0, 0, 0, .26), 13)
+	box(rect, Color("22334c") if active else PANEL, 13, color if active else EDGE, 2 if active else 1)
+	box(Rect2(rect.position + Vector2(8, 30), Vector2(116, 58)), Color(color, .10 if active else .045), 8)
+	if active:
+		box(Rect2(rect.position + Vector2(35, -2), Vector2(62, 4)), color.lightened(.2), 2)
 	var chain = game.tray_insights[i] if i < game.tray_insights.size() else 0
-	head("CHAIN ×%d" % chain if chain > 1 else "READY" if active else "SELECT", Vector2(rect.get_center().x, 883), 13, color if chain > 1 or active else MUTED, 1)
+	head("CHAIN ×%d" % chain if chain > 1 else "SELECTED" if active else "TAP TO SELECT", Vector2(rect.get_center().x, 883), 13, color if chain > 1 or active else MUTED, 1)
 	var shape: Array = CutterManager.SHAPES[cutter.shape]
 	var bounds = Vector2.ZERO
 	for p in shape:
@@ -290,17 +307,24 @@ func draw_footer() -> void:
 		return
 	box(Rect2(204, 1014, 132, 44), Color("2b5075") if game.precise else PANEL, 7, ACCENT if game.precise else EDGE, 1)
 	head("AIM: ON" if game.precise else "AIM: OFF", Vector2(270, 1042), 17, INK, 1)
-	var ahead = SupplySystem.moves_to_drop(game.turns)
-	label("2 ROW RISE" if SupplySystem.due_rows(game.turns + ahead) == 2 else "MOVE RISE", Vector2(414, 1029), 9, MUTED, 1)
-	head("IN %d MOVE%s" % [ahead, "" if ahead == 1 else "S"], Vector2(414, 1050), 18, ACCENT, 1)
+	label("NEXT MILESTONE", Vector2(414, 1023), 9, MUTED, 1)
+	head(str(game.score_target()), Vector2(414, 1044), 24, ACCENT, 1)
+	box(Rect2(355, 1052, 118, 4), EDGE, 2)
+	var progress: float = game.score_progress()
+	if progress > .01:
+		box(Rect2(355, 1052, 118 * progress, 4), ACCENT, 2)
 
 func button(rect: Rect2, value: String, primary: bool = false) -> void:
-	box(rect, ACCENT if primary else Color("263d59"), 7, Color.TRANSPARENT if primary else EDGE, 0 if primary else 1)
+	box(Rect2(rect.position + Vector2(0, 4), rect.size), Color("215069") if primary else Color("0b1427"), 10)
+	box(rect, ACCENT if primary else Color("26364f"), 10, Color("bcecff") if primary else EDGE, 1)
+	if primary:
+		draw_line(rect.position + Vector2(12, 2), rect.position + Vector2(rect.size.x - 12, 2), Color(1, 1, 1, .4), 1, true)
 	head(value, rect.position + Vector2(rect.size.x / 2, rect.size.y / 2 + 7), 22, Color("0a1a2f") if primary else INK, 1)
 
 func draw_overlay() -> void:
 	draw_rect(Rect2(-game.position - Vector2(100, 100), get_viewport_rect().size + Vector2(200, 200)), Color(.02, .05, .10, .86))
-	box(Rect2(65, 278, 410, 518), Color("172a44"), 13, EDGE, 1)
+	box(Rect2(59, 284, 422, 524), Color(0, 0, 0, .30), 23)
+	box(Rect2(65, 278, 410, 518), Color("17243b"), 20, Color("405373"), 1)
 	box(Rect2(86, 278, 64, 3), ACCENT, 1)
 	match game.overlay:
 		"help":
@@ -321,8 +345,8 @@ func draw_overlay() -> void:
 			button(Rect2(95, 625, 350, 50), "START FRESH")
 			button(game.replay_rect, "CONTINUE", true)
 		"over":
-			head("CEILING HIT", Vector2(95, 349), 42)
-			label("Time ran out. The next rise hit the ceiling." if game.model.end_reason == "timer" else "The next rise pushed blocks past the ceiling.", Vector2(95, 384), 13, MUTED)
+			head("NEW PERSONAL BEST" if game.score > game.run_best else "NICE RUN", Vector2(95, 349), 37)
+			label("The stack reached the ceiling. Go again?", Vector2(95, 384), 13, MUTED)
 			head(str(game.score), Vector2(270, 488), 72 if game.score < 1000000000 else 50, ACCENT, 1)
 			label("POINTS", Vector2(270, 517), 11, MUTED, 1)
 			label("LEVEL %d  /  %d MOVES  /  CHAIN ×%d" % [SupplySystem.pressure_level(game.turns, game.model.active_seconds), game.turns, game.best_combo], Vector2(270, 565), 11, INK, 1)
@@ -356,7 +380,7 @@ func draw_help() -> void:
 	label("4+ same colour", Vector2(180, 556), 13)
 	label("touching sides, in any shape", Vector2(180, 578), 12, MUTED)
 	label("Diagonals and full rows have no special rule.", Vector2(112, 602), 10, MUTED)
-	label("Timer + moves push a row up from below.", Vector2(95, 640), 14, INK)
+	label("The clock pushes a new row up from below.", Vector2(95, 640), 14, INK)
 	label("Clear space before blocks cross the ceiling.", Vector2(95, 661), 14, MUTED)
 	label("Clock pauses in menus and animations.", Vector2(95, 682), 14, MUTED)
 	button(game.replay_rect, "GOT IT", true)

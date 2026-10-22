@@ -5,7 +5,7 @@ func _initialize() -> void:
 
 func capture() -> void:
 	var game = load("res://scenes/main.tscn").instantiate()
-	game.save = SaveStore.new("/private/tmp/punch-pop-preview-v4.cfg")
+	game.save = SaveStore.new("/private/tmp/punch-pop-preview-v5.cfg")
 	game.pressure_enabled = false
 	root.add_child(game)
 	await process_frame
@@ -29,7 +29,7 @@ func capture() -> void:
 	game.model.reset(20261022)
 	game.reset_transients()
 	game.sync_model()
-	game.hover = Vector2i(0, 6)
+	game.hover = game.targets.keys()[0]
 	await snap("preview")
 	await snap("placement-preview")
 	game.precise = true
@@ -43,7 +43,7 @@ func capture() -> void:
 	game.save.high_contrast = true
 	await snap("contrast-preview")
 	game.save.high_contrast = false
-	await game.place_cutter(Vector2i(0, 6))
+	await game.place_cutter(game.targets.values()[0])
 	await create_timer(1).timeout
 	await snap("after-chain")
 	game.overlay = "resume"
@@ -77,7 +77,8 @@ func capture() -> void:
 	game.model.turns = 1
 	game.model.incoming = [0, 1, 2, 1, 3, 0, 2]
 	game.sync_model()
-	game.place_cutter(Vector2i(0, 8))
+	game.model.rise_remaining = 0
+	game.rise_from_timer()
 	while game.busy and game.phase != "match":
 		await process_frame
 	await snap("row-match-preview")

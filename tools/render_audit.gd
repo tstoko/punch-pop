@@ -1,14 +1,14 @@
 extends SceneTree
 
 var game: Node2D
-var report := {"date": "2026-10-22", "rules": "v4 timed bottom rise", "scope": "Desktop Compatibility renderer on this Mac; not Android FPS or physical touch validation.", "viewports": [], "move_seconds": []}
+var report := {"date": "2026-10-23", "rules": "v5 single timed pressure", "scope": "Desktop Compatibility renderer on this Mac; not Android FPS or physical touch validation.", "viewports": [], "move_seconds": []}
 
 func _initialize() -> void:
 	call_deferred("run")
 
 func run() -> void:
 	game = load("res://scenes/main.tscn").instantiate()
-	game.save = SaveStore.new("/private/tmp/punch-pop-render-test.cfg")
+	game.save = SaveStore.new("/private/tmp/punch-pop-render-v5-test.cfg")
 	game.pressure_enabled = false
 	root.add_child(game)
 	await process_frame
@@ -23,7 +23,7 @@ func run() -> void:
 			await process_frame
 		game.overlay = ""
 		await RenderingServer.frame_post_draw
-		root.get_texture().get_image().save_png("res://docs/audit-%dx%d.png" % [size.x, size.y])
+		root.get_texture().get_image().save_png("res://docs/v5-audit-%dx%d.png" % [size.x, size.y])
 		var visible := root.get_visible_rect().size
 		var board_rect := Rect2(game.position + game.BOARD_POS, Vector2(420, 540))
 		var tray_rect := Rect2(game.position + Vector2(60, 862), Vector2(420, 136))
@@ -63,8 +63,8 @@ func run() -> void:
 	game.overlay = "over" if game.over else ""
 	await create_timer(1.4).timeout
 	await RenderingServer.frame_post_draw
-	root.get_texture().get_image().save_png("res://docs/audit-after-play.png")
-	var file := FileAccess.open("res://docs/render-audit.json", FileAccess.WRITE)
+	root.get_texture().get_image().save_png("res://docs/v5-audit-after-play.png")
+	var file := FileAccess.open("res://docs/v5-render-audit.json", FileAccess.WRITE)
 	file.store_string(JSON.stringify(report, "\t"))
 	print(JSON.stringify(report))
 	quit()

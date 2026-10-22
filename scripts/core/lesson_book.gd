@@ -35,15 +35,20 @@ static func chain_pocket(board: BoardManager) -> void:
 	board.put(Vector2i(1, 6), 3)
 
 static func endless_opening(board: BoardManager, rng: RandomNumberGenerator) -> void:
-	board.clear()
-	chain_pocket(board)
-	for x in range(2, 7):
-		var depth := rng.randi_range(3, 5)
-		for y in range(9 - depth, 9):
-			var color := rng.randi_range(0, 3)
-			for attempt in 4:
-				board.put(Vector2i(x, y), color)
-				if MatchSystem.groups(board).is_empty():
-					break
-				color = (color + 1) % 4
-			board.put(Vector2i(x, y), color)
+	# Fresh terrain every round, with four rows of ceiling headroom. The authored
+	# two-wave pocket belongs to training, so repeat play rewards reading the board.
+	for attempt in 32:
+		board.clear()
+		for x in BoardManager.WIDTH:
+			var depth := rng.randi_range(3, 5)
+			for y in range(9 - depth, 9):
+				var color := rng.randi_range(0, 3)
+				for choice in 4:
+					board.put(Vector2i(x, y), color)
+					if MatchSystem.groups(board).is_empty():
+						break
+					color = (color + 1) % 4
+		if MatchSystem.groups(board).is_empty() and CutterManager.candidates(board).size() >= 3:
+			return
+	# Bounded fallback for pathological seeds; still settled and playable.
+	SpawnManager.seed_board(board, rng)

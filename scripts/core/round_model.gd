@@ -46,7 +46,7 @@ func reset(seed_value: int = -1, lesson_index: int = -1) -> void:
 		tray = [LessonBook.build(board, lesson), {}, {}]
 	else:
 		LessonBook.endless_opening(board, rng)
-		tray = CutterManager.diverse_refresh(board, [{"shape": 1, "color": 3}, {}, {}], rng)
+		tray = CutterManager.diverse_refresh(board, [{}, {}, {}], rng)
 	incoming = SpawnManager.pressure_row(board, rng)
 
 func snapshot() -> Dictionary:
@@ -164,9 +164,6 @@ func play(slot: int, origin: Vector2i) -> Array:
 	if lesson >= 0:
 		lesson_complete = true
 		return events
-	for i in SupplySystem.due_rows(turns):
-		if not drop(events):
-			return events
 	if not replenish(events, slot):
 		return events
 	selected = slot
@@ -197,14 +194,8 @@ func expire_clock() -> Array:
 
 func replenish(events: Array, used_slot: int = -1) -> bool:
 	var refills := 0
-	while board.occupied() < SupplySystem.MIN_CELLS or CutterManager.candidates(board).is_empty():
-		var has_moves := not CutterManager.candidates(board).is_empty()
-		var tallest := 0
-		for x in 7:
-			tallest = maxi(tallest, SupplySystem.height(board, x))
-		# Reward refills must not force an avoidable overflow on uneven boards.
-		if has_moves and tallest >= 7:
-			break
+	# A successful cut buys real space. Only restore supply when play stops.
+	while CutterManager.candidates(board).is_empty():
 		if refills == 0:
 			fresh_batches += 1
 			events.append({"type": "fresh"})

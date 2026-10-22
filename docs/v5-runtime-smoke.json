@@ -1,0 +1,12 @@
+{
+	"active_seconds": 38.4999999999987,
+	"checks": 13,
+	"date": "2026-10-23",
+	"end_reason": "timer",
+	"failures": 0,
+	"scope": "Headless real frame clock; no desktop window or renderer measurement",
+	"score": 0,
+	"timed_expiries": 5,
+	"turns": 0,
+	"wall_seconds": 41.503
+}

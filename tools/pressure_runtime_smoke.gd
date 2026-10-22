@@ -13,8 +13,15 @@ func verify(condition: bool, description: String) -> void:
 		printerr("FAIL: " + description)
 
 func run() -> void:
-	var save_path := "user://test_real_clock_%d.cfg" % Time.get_ticks_usec()
+	var save_path := "/private/tmp/punch_pop_v5_real_clock_%d.cfg" % Time.get_ticks_usec()
 	var began := Time.get_ticks_msec()
+	var expected := RoundModel.new()
+	expected.reset(20261022)
+	for i in 12:
+		if expected.over:
+			break
+		expected.advance_clock(expected.rise_remaining)
+		expected.expire_clock()
 	var game = load("res://scenes/main.tscn").instantiate()
 	game.save = SaveStore.new(save_path)
 	game.pressure_enabled = false
@@ -56,13 +63,13 @@ func run() -> void:
 	while not resumed.over and Time.get_ticks_msec() - began < 45000:
 		await process_frame
 	verify(resumed.over and resumed.overlay == "over" and resumed.model.end_reason == "timer", "Unattended real-time play reaches a timer ceiling loss")
-	verify(resumed.model.timed_rows == 3 and resumed.turns == 0 and resumed.score == 0, "Three timer expiries defeat the untouched opening without free score")
-	verify(is_equal_approx(resumed.model.active_seconds, 24), "Only 24 seconds of decision time were charged across pause and reload")
+	verify(resumed.model.timed_rows == expected.timed_rows and resumed.turns == 0 and resumed.score == 0, "Timer expiries defeat the untouched opening without free score")
+	verify(is_equal_approx(resumed.model.active_seconds, expected.active_seconds), "Only expected decision time was charged across pause and reload")
 	var disk := SaveStore.new(save_path)
 	disk.load_data()
 	verify(disk.round_data.is_empty(), "Completed timer death clears the resumable round")
-	var report := {"date": "2026-10-22", "scope": "Headless real frame clock; no desktop window or renderer measurement", "checks": checks, "failures": failures, "wall_seconds": (Time.get_ticks_msec() - began) / 1000.0, "active_seconds": resumed.model.active_seconds, "timed_expiries": resumed.model.timed_rows, "score": resumed.score, "turns": resumed.turns, "end_reason": resumed.model.end_reason}
-	var file := FileAccess.open("res://docs/v4-runtime-smoke.json", FileAccess.WRITE)
+	var report := {"date": "2026-10-23", "scope": "Headless real frame clock; no desktop window or renderer measurement", "checks": checks, "failures": failures, "wall_seconds": (Time.get_ticks_msec() - began) / 1000.0, "active_seconds": resumed.model.active_seconds, "timed_expiries": resumed.model.timed_rows, "score": resumed.score, "turns": resumed.turns, "end_reason": resumed.model.end_reason}
+	var file := FileAccess.open("res://docs/v5-runtime-smoke.json", FileAccess.WRITE)
 	file.store_string(JSON.stringify(report, "\t"))
 	print(JSON.stringify(report))
 	resumed.queue_free()

@@ -7,7 +7,7 @@ func _initialize() -> void:
 	call_deferred("run")
 
 func run() -> void:
-	var result := {"rules": "v4 timed bottom rise + faster move pressure", "date": "2026-10-22", "episodes_per_policy": EPISODES, "cap": CAP, "cohorts": []}
+	var result := {"rules": "v5 single timed rise + recovery only + varied openings", "date": "2026-10-23", "episodes_per_policy": EPISODES, "cap": CAP, "cohorts": []}
 	var began := Time.get_ticks_msec()
 	for profile in [{"policy": "random", "think": 3.0}, {"policy": "greedy", "think": 3.0}, {"policy": "height_aware", "think": 3.0}, {"policy": "height_aware", "think": 0.0}, {"policy": "height_aware", "think": 6.0}]:
 		var policy: String = profile.policy
@@ -96,7 +96,7 @@ func run() -> void:
 		summary.erase("sessions")
 		print(JSON.stringify(summary))
 	result.elapsed_seconds = (Time.get_ticks_msec() - began) / 1000.0
-	var file := FileAccess.open("res://docs/v4-pressure-audit.json", FileAccess.WRITE)
+	var file := FileAccess.open("res://docs/v5-pressure-audit.json", FileAccess.WRITE)
 	file.store_string(JSON.stringify(result, "\t"))
-	print("Saved docs/v4-pressure-audit.json")
+	print("Saved docs/v5-pressure-audit.json")
 	quit()

@@ -36,6 +36,7 @@ var score := 0
 var turns := 0
 var combo := 0
 var best_combo := 0
+var run_best := 0
 var tutorial := 0
 var notice := ""
 var notice_time := 0.0
@@ -70,6 +71,7 @@ var replay_rect := Rect2(95, 698, 350, 60)
 
 func _ready() -> void:
 	save.load_data()
+	run_best = save.best
 	ui = UIManager.new()
 	ui.game = self
 	add_child(ui)
@@ -91,6 +93,7 @@ func _ready() -> void:
 		get_tree().quit()
 
 func start_game(force_tutorial: bool = false) -> void:
+	run_best = save.best
 	reset_transients()
 	model.reset(-1, 0 if force_tutorial or not save.tutorial_done else -1)
 	undo_state = {}
@@ -144,7 +147,7 @@ func sync_model() -> void:
 	tray_insights.clear()
 	for slot in tray.size():
 		var best := 0
-		if not tray[slot].is_empty() and not over:
+		if tutorial > 0 and not tray[slot].is_empty() and not over:
 			for origin in CutterManager.placements(model.board, tray[slot]):
 				best = maxi(best, model.forecast(slot, origin).get("waves", 0))
 		tray_insights.append(best)
@@ -381,12 +384,18 @@ func present_events(events: Array, before: Dictionary, old_level: int, old_best:
 					elif event.source == "refill":
 						reason = "Restocking completed this group. Same 4+ rule."
 					set_phase("match", title, reason)
-				var hold := ((.70 if event.wave == 1 else .50) if event.wave > 0 else .07) if save.explain_clears else (.12 if event.wave > 0 else .0)
+				var hold := ((.48 if event.wave == 1 else .34) if event.wave > 0 else .07) if save.explain_clears else (.12 if event.wave > 0 else .0)
 				if hold > 0:
 					await get_tree().create_timer(hold).timeout
 				score += event.earned
 				combo = maxi(combo, event.wave)
-				add_floater("+%d" % event.earned, cell_center(event.points[0]), ACCENT)
+				var center := Vector2.ZERO
+				for point in event.points:
+					center += cell_center(point)
+				center /= event.points.size()
+				add_floater("+%d" % event.earned, center, ACCENT)
+				if event.wave > 1:
+					celebrate("%s ×%d" % ["SUPER CHAIN" if event.wave > 2 else "CHAIN", event.wave])
 				await pop_cells(event.points, event.wave)
 				anticipating.clear()
 				match_groups.clear()
@@ -403,7 +412,7 @@ func present_events(events: Array, before: Dictionary, old_level: int, old_best:
 				movements.clear()
 				effects.sound("land", 0)
 			"row":
-				var title := "TIME UP — ROW RISES" if event.reason == "timer" else "BOTTOM ROW RISES" if event.reason == "scheduled" else "LOW BOARD — RESTOCK"
+				var title := "TIME UP — ROW RISES" if event.reason == "timer" else "BOTTOM ROW RISES" if event.reason == "scheduled" else "NO CUTS — NEW ROW"
 				var detail := "Everything moves up one. Keep below the ceiling."
 				if event.reason == "scheduled":
 					detail = "Move pressure: the previewed row pushes up."
@@ -424,7 +433,7 @@ func present_events(events: Array, before: Dictionary, old_level: int, old_best:
 				rising_colors.clear()
 				incoming = event.next.duplicate()
 			"fresh":
-				set_phase("supply", "LOW BOARD → RESTOCK", "Clearing earned fresh blocks. This is not a penalty.")
+				set_phase("supply", "FRESH CHANCE", "No legal cut remains. Fresh blocks keep you playing.")
 				await get_tree().create_timer(.20 if save.explain_clears else .05).timeout
 	last_summary = TurnSummary.from_events(events)
 	last_clear_time = 3.5 if last_summary.matched > 0 else 0.0
@@ -436,10 +445,12 @@ func present_events(events: Array, before: Dictionary, old_level: int, old_best:
 	elif over:
 		notice = "The rising board crossed the ceiling."
 		overlay = "over"
-	elif SupplySystem.pressure_level(turns, model.active_seconds) > old_level:
-		celebrate("PRESSURE %d" % SupplySystem.pressure_level(turns, model.active_seconds))
 	elif old_best > 0 and score > old_best and before.score <= old_best:
 		celebrate("NEW BEST!")
+	elif tutorial == 0 and score >= target_after(int(before.score)):
+		celebrate("%s POINTS!" % target_after(int(before.score)))
+	elif SupplySystem.pressure_level(turns, model.active_seconds) > old_level:
+		message("Level %d · rows arrive faster" % SupplySystem.pressure_level(turns, model.active_seconds))
 	if pause_after_move and overlay.is_empty():
 		overlay = "pause"
 	pause_after_move = false
@@ -460,11 +471,11 @@ func pop_cells(points: Array, wave: int) -> void:
 	anim_t = 0
 	effects.sound("cut" if wave == 0 else "chain" if wave > 1 else "match", wave)
 	for p in points:
-		effects.burst(cell_center(p), board.at(p), 5 if save.reduced_motion else 8 + wave * 3)
+		effects.burst(cell_center(p), board.at(p), 5 if save.reduced_motion else 8 + wave * 3, wave)
 	if wave > 0:
 		shake = minf(3.5, 1 + wave)
 	var tween := create_tween()
-	tween.tween_property(self, "anim_t", 1.0, .09 if save.reduced_motion else .14).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_IN)
+	tween.tween_property(self, "anim_t", 1.0, .09 if save.reduced_motion else (.11 if wave == 0 else .16 if wave == 1 else .21)).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_IN)
 	await tween.finished
 	board.remove(points)
 	shrinking.clear()
@@ -499,6 +510,26 @@ func finish_tutorial() -> void:
 	save.save_data()
 	start_game()
 	message("Cut 2+. Match 4+. Beat the rising rows.", 4)
+
+# Targets are presentation only: undo and resumed rounds derive them from score.
+func target_after(value: int) -> int:
+	for target in [500, 1000, 2000, 3500, 5000]:
+		if value < target:
+			return target
+	return 5000 + (int((value - 5000) / 2500.0) + 1) * 2500
+
+func score_target() -> int:
+	return target_after(score)
+
+func score_progress() -> float:
+	var target := score_target()
+	var lower := 0
+	for milestone in [500, 1000, 2000, 3500, 5000]:
+		if score >= milestone:
+			lower = milestone
+	if score >= 5000:
+		lower = target - 2500
+	return clampf(float(score - lower) / float(target - lower), 0.0, 1.0)
 
 func celebrate(value: String) -> void:
 	celebration = value
