@@ -1,0 +1,12 @@
+.godot/
+builds/
+*.tmp
+.DS_Store
+
+# Local secrets and signing material
+.env
+.env.*
+export_credentials.cfg
+*.keystore
+*.jks
+*.p12
