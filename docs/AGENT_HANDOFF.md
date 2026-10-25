@@ -1,67 +1,55 @@
 # Punch Pop — agent handoff
 
-Updated 23 October 2026. Start with this file and the root README. The repository contains the complete Godot source and test evidence; no account or backend is required to play.
+Updated 23 October 2026. Read this and the README before changing the game.
 
-## Latest owner feedback
+## Current direction
 
-The owner approved publishing v0.5 as-is with comments. Read [the playtest critique](v5-design-critique.md) before future design work: fuller-cut bonuses, streaks between rows, progressive difficulty, an exploratory bomb and, especially, fiddly mouse/phone selection. These are recorded proposals, not implemented features.
+The owner approved the v0.7 interface as perfect but found the game far too easy. The current v0.7.1 patch changes balance only: preserve UI/input, shape punches, finite hands and supply setups. The personal test phone is iPhone 15 Pro; packaging/signing remains deferred.
 
-## Current state
+The implemented build is **0.7.1**, native portrait Godot 4.5.1. Read [v0.7.1 build notes](v7-1-build-notes.md). The v0.7/v0.6/v0.5 notes, screenshots and policy reports are historical. No physical-device performance or retention claim follows from the automated results.
 
-The implemented build is **0.5.0**, a native portrait Godot 4.5.1 game. Read [v0.5 build notes](v5-build-notes.md). Android export exists, but physical-device QA and commercial validation remain.
+## Current rules
 
-The latest request authorized a team-led improvement of aesthetics and gameplay. The implemented pass replaces dual pressure with one visible timed rise, varies endless openings, preserves clear match explanations, adds score milestones, and improves tiles, cutter cards, effects and sound.
+- The board is 7 × 9, with four block colours. Three shape punches use `color = -1`: every occupied footprint cell is removed, with at least two hits needed. Colours matter for automatic matches only. Legacy colour-specific helpers remain for compatibility checks.
+- Punches form a finite hand. Used slots stay empty; remaining legal punches are retained until no current card is usable, then a new three-shape hand is dealt. Unusable remaining cards may be discarded after the board changes. Empty slots are valid save data.
+- Gravity settles blocks; connected orthogonal groups of four or more of one colour clear. Successive waves multiply match points. Direct hits earn 10 each, plus 5 each for a completely filled footprint. Automatic points are 20 × wave × block count.
+- Only cut-triggered multi-wave chains earn time: half a second per wave after the first, capped at 1.5 seconds and the current interval. A single automatic wave grants no time. Forecasts include `time_bonus`; actual breathing events carry awarded time. Timer/refill clears do not earn it.
+- The countdown opens at 12 seconds and accelerates to a minimum of 2.75 seconds. Pressure advances every 10 cuts or 20 active seconds. Cuts never reset it. Menus, animation, training and focus loss pause active time.
+- Incoming supply uses bounded candidate rows with pairs/triples and near-bottom punch-created match opportunities. It rejects immediate arrival matches; do not reintroduce idle point farming.
+- Expiry pushes a previewed bottom row upward. An already occupied top row causes atomic loss. Recovery rows appear only if no two-block punch exists.
+- Undo restores board/score/RNG and removes awarded chain time while retaining actual thinking time. Timed rises clear undo.
+- Training marks a specific goal and accepts its required teaching cut, keeping the example consistent with its explanation.
+- The home menu provides Play/Continue, New Run when saved, optional Learn to Play and Settings. Main Play enters arcade directly. Pause → Main Menu checkpoints the run.
+- Card dragging requires 12 logical pixels of movement. Its full-size footprint sits up to 100 logical pixels above the finger, easing to 40 near the bottom edge; stable nearby placements prevent jitter. Returning to the tray or leaving board bounds cancels. Tapping a card selects it; tap placement remains. Exact Aim is an advanced pause option/keyboard shortcut rather than a main HUD control.
+- Quick clear presentation is the fresh-install default. Existing saved explanation preferences remain respected. Reduced motion, stronger colours, sound and haptics remain.
 
-## Actual rules in 0.5
+## Architecture and saves
 
-- Board: 7 × 9, four colours, three colour-specific cutter cards. A cut removes at least two blocks of its own colour.
-- Gravity settles blocks. Four or more same-colour orthogonal neighbours automatically clear. Further waves multiply match points. Direct cuts award 10 per block; automatic waves award 20 × wave per block.
-- The cumulative decision clock starts at eight seconds. Expiry pushes a previewed bottom row upward; a block already at the top causes atomic loss. Cuts never reset the clock or schedule rows.
-- Pressure level increases each 12 cuts or 20 active seconds, capped at eight. Future clock intervals shorten to 3.5 seconds. Menus, animation, training and focus loss pause time.
-- Replenishment occurs only when no legal cutter exists. Sparse playable boards remain sparse, giving successful cuts value.
-- Endless openings vary by seed; the fixed authored chain pocket is training-only. Automatic tray chain hints are training-only, but selected-move forecasts remain.
-- Score milestone UI and celebrations start at 500, then 1,000, 2,000, 3,500, 5,000 and every 2,500 thereafter. These are presentation goals, not score bonuses.
-- One-step undo restores cut state and RNG but never thinking time. Timed rises clear undo. Resume preserves completed state and partial time without offline catch-up.
-- Reduced motion, strong colours, audio, haptics, help and three untimed lessons remain available.
+`RoundModel` calculates full turns before presentation. Keep forecast, model events, controller and visible explanations in agreement. Source responsibilities are listed in the README.
 
-## Architecture and persistence
+Normal player data lives in Godot `user://punch_pop.cfg`, outside the repository. Preserve it. Checkpoint version 4 migrates versions 2 and 3 by changing legacy punch colours to -1 without RNG consumption. Valid endless board, score, clock and RNG state remain; legacy training restarts the same lesson with its new layout; version 2 gains a full initial clock because it predates timer state. Seed/state are strings to preserve 64-bit precision. Tests use isolated temporary saves.
 
-`RoundModel` is authoritative and computes complete event timelines before presentation. `GameManager` animates those events and handles input/lifecycle; `UIManager` draws the interface. Keep model rules and visible explanations in agreement.
+A timed rise checkpoints the expired clock before animation; interruption must replay the owed rise. The main-menu clock cannot advance. Undo must never retain chain credit or refund active thinking time; compute elapsed time from the pre-cut checkpoint.
 
-- `scripts/core/round_model.gd`: rules, forecasts, clock state, checkpoints and event generation.
-- `scripts/core/spawn_manager.gd`: atomic bottom rises and preview generation; old top-drop helpers remain for historical tests.
-- `scripts/core/supply_system.gd`: pressure intervals, move cadence and recovery.
-- `scripts/core/cutter_manager.gd`: colour filtering, geometry, snapping, usable and varied offers.
-- `scripts/core/match_system.gd`, `gravity_system.gd`, `combo_manager.gd`: resolution and scoring.
-- `scripts/core/lesson_book.gd`: teaching layouts and endless opening.
-- `scripts/core/turn_summary.gd`: receipts from actual events.
-- `scripts/game_manager.gd`, `ui_manager.gd`, `effects_manager.gd`, `save_store.gd`: presentation, effects and atomic local saves.
-
-Normal data lives in Godot `user://punch_pop.cfg`, outside this repository. Preserve best scores, preferences and valid saved rounds. Current checkpoint schema is version 3; version 2 loads through migration with a full initial eight-second clock. RNG seed/state are serialized as strings to preserve 64-bit precision. A timed rise saves its expired clock before animation, so interruption owes that rise after Continue. Use isolated test saves, never the player's normal save.
-
-## Run and verify
-
-Install **Godot 4.5.1** (Compatibility renderer) and place `godot` or `godot4` on PATH. macOS launchers also detect `/Applications/Godot.app`. The original Mac development runtime under `/private/tmp` is temporary and is not shipped in Git.
-
-From the repository root:
+## Verification
 
 ```sh
-./tools/run.sh --headless --editor --import --quit
 ./tools/test.sh
+./tools/test.sh --flow
 ./tools/test.sh --real-clock
-./tools/run.sh --headless --script res://tools/pressure_audit.gd
+./tools/test.sh --audit
 ```
 
-The shell launchers use Bash for macOS/Linux portability. Windows agents can invoke Godot directly: import with `godot --headless --path . --editor --import --quit`, then run `godot --headless --path . --script res://tests/test_runner.gd`. Check for engine script errors as well as the completion marker: Godot can return zero after a script error. `tools/test.sh` enforces both.
+The wrapper retains strict engine-error filtering. On macOS it creates a disposable shadow project, with system PEM CA roots to avoid sandboxed Keychain lookup without disabling TLS verification. Never ship that machine-local path in `project.godot`.
 
-Latest validated results are documented in `docs/v5-build-notes.md`, `docs/v5-render-audit.json`, `docs/v5-pressure-audit.json` and `docs/v5-runtime-smoke.json`. The main suite passed 9,205 checks. Old v4 reports are historical.
+Current evidence belongs in `v7-1-build-notes.md`, `v7-1-runtime-smoke.json` and `v7-1-pressure-audit.json`. The flow suite independently verifies present UX/rules; the policy audit counts opening affordability and compares bot strategies. Bot survival and desktop timings are not human engagement or phone performance.
 
-Graphical audit/capture tools use isolated temporary saves. They open windows and must obey the desktop preference below. Bots and desktop frame timings do not demonstrate human retention or phone performance.
+## Owner workflow
 
-## User workflow preference
+**Do not disrupt the active Mac desktop.** Open/focus native game or browser windows only on Desktop 2. Godot (`org.godotengine.godot`) had that assignment on the original machine, but it is an OS preference and must be verified each time; an empty `defaults read com.apple.spaces app-bindings` result does not verify it. Prefer background/headless work otherwise. Do not create or message other Codex chats without explicit authorization.
 
-**Do not disrupt the user's active Mac desktop.** Keep coding and automated tests in the background. Open or focus native game/browser windows only on **Desktop 2**. Godot (`org.godotengine.godot`) was confirmed assigned to Desktop 2 on the original Mac, but that assignment is an OS preference and is not included in this repository. Verify it before GUI work; if unavailable, use headless checks and leave the GUI closed. Do not create or message other Codex chats unless the user explicitly authorizes it.
+Graphical capture/render-audit tools open native windows. Their v7 filenames preserve historical evidence, but do not run them without a verified desktop assignment. A currently open game is not permission to move windows or change OS preferences.
 
-## Assets and licensing
+## Assets
 
-Artwork and sounds are generated in project code; `assets/icon.svg` is original vector art. Barlow Condensed is bundled with its SIL Open Font License at `assets/fonts/OFL.txt`. No open-source license has been chosen for the original game code. The repository is private by default. Generated Godot caches, credentials, signing keys and player save data do not belong in Git.
+Block art and audio are generated by project code. `assets/icon.svg` is original. Barlow Condensed and its SIL Open Font License are bundled. No licence has been chosen for original game code. Do not commit caches, player saves, credentials or signing material.

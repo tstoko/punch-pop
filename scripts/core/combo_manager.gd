@@ -4,6 +4,10 @@ extends RefCounted
 static func cut_score(count: int) -> int:
 	return count * 10
 
+# Reward a completely filled footprint; partial cuts keep their base score.
+static func perfect_bonus(count: int, footprint: int) -> int:
+	return count * 5 if count >= 3 and count == footprint else 0
+
 static func match_score(count: int, wave: int) -> int:
 	return count * 20 * wave
 

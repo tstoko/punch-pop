@@ -27,6 +27,13 @@ var precise := false
 var forecast_cache: Dictionary = {}
 var undo_state: Dictionary = {}
 var dragging := false
+var drag_from_card := false
+var drag_active := false
+var drag_start_pos := Vector2.ZERO
+var pointer_pos := Vector2.ZERO
+var drag_origin := Vector2i(-99, -99)
+var round_available := false
+var settings_return := "home"
 var pause_after_move := false
 var touch_id := -1
 var busy := false
@@ -80,10 +87,15 @@ func _ready() -> void:
 	_sync_settings()
 	if not save.round_data.is_empty() and model.restore(save.round_data):
 		undo_state = save.undo_data.duplicate(true)
+		if save.round_data.get("version", 0) < RoundModel.VERSION and model.lesson >= 0:
+			undo_state = {}
 		sync_model()
-		overlay = "resume"
+		round_available = true
+		overlay = "home"
 	else:
-		start_game()
+		model.reset(-1, -1)
+		sync_model()
+		overlay = "home"
 	var args := OS.get_cmdline_user_args()
 	if "--screenshot" in args:
 		await get_tree().create_timer(.5).timeout
@@ -92,17 +104,35 @@ func _ready() -> void:
 		get_viewport().get_texture().get_image().save_png(path)
 		get_tree().quit()
 
+func has_saved_round() -> bool:
+	return round_available and not model.over
+
+func go_home() -> void:
+	cancel_gesture()
+	if round_available:
+		checkpoint()
+	overlay = "home"
+
+func cancel_gesture() -> void:
+	dragging = false
+	drag_from_card = false
+	drag_active = false
+	drag_origin = Vector2i(-99, -99)
+	hover = Vector2i(-99, -99)
+	touch_id = -1
+
 func start_game(force_tutorial: bool = false) -> void:
+	round_available = true
 	run_best = save.best
 	reset_transients()
-	model.reset(-1, 0 if force_tutorial or not save.tutorial_done else -1)
+	model.reset(-1, 0 if force_tutorial else -1)
 	undo_state = {}
 	sync_model()
 	checkpoint()
 
 func reset_transients() -> void:
 	busy = false
-	dragging = false
+	cancel_gesture()
 	pause_after_move = false
 	touch_id = -1
 	overlay = ""
@@ -189,28 +219,30 @@ func _process(delta: float) -> void:
 func _notification(what: int) -> void:
 	if what == NOTIFICATION_WM_CLOSE_REQUEST:
 		# Disk contains the last settled round even during an animation.
-		if is_instance_valid(ui) and not busy:
+		if is_instance_valid(ui) and not busy and round_available:
 			checkpoint()
 		return
 	if what != NOTIFICATION_APPLICATION_FOCUS_OUT:
 		return
-	dragging = false
-	touch_id = -1
-	hover = Vector2i(-99, -99)
+	cancel_gesture()
 	if is_instance_valid(ui) and not over:
 		if busy:
 			pause_after_move = true
 		else:
-			checkpoint()
+			if round_available:
+				checkpoint()
 			if overlay.is_empty():
 				overlay = "pause"
 
 func _input(event: InputEvent) -> void:
 	if event is InputEventKey and event.pressed and not event.echo:
-		if event.keycode == KEY_ESCAPE and not over and not busy:
-			overlay = "pause" if overlay.is_empty() else ("lesson" if model.lesson_complete else "")
-			dragging = false
-		if not busy and event.keycode == KEY_Z:
+		if event.keycode == KEY_ESCAPE and not busy:
+			if overlay == "settings":
+				overlay = settings_return
+			elif not over and overlay != "home":
+				overlay = "pause" if overlay.is_empty() else ("lesson" if model.lesson_complete else "")
+			cancel_gesture()
+		if not busy and overlay in ["", "over"] and event.keycode == KEY_Z:
 			undo_move()
 		if not busy and overlay.is_empty() and event.keycode == KEY_A:
 			precise = not precise
@@ -228,8 +260,7 @@ func _input(event: InputEvent) -> void:
 			if not event.canceled:
 				release(event.position - position)
 			else:
-				dragging = false
-				hover = Vector2i(-99, -99)
+				cancel_gesture()
 			touch_id = -1
 	elif event is InputEventScreenDrag and event.index == touch_id:
 		move_pointer(event.position - position)
@@ -245,6 +276,7 @@ func cell_at(p: Vector2) -> Vector2i:
 	return Vector2i(floor((p.x - BOARD_POS.x) / CELL), floor((p.y - BOARD_POS.y) / CELL))
 
 func press(p: Vector2) -> void:
+	pointer_pos = p
 	if not overlay.is_empty():
 		overlay_press(p)
 		return
@@ -262,16 +294,15 @@ func press(p: Vector2) -> void:
 		else:
 			undo_move()
 		return
-	if Rect2(204, 1014, 132, 44).has_point(p) and tutorial == 0:
-		precise = not precise
-		hover = Vector2i(-99, -99)
-		message("Aim: tap the stamp's top-left cell" if precise else "Easy tap: choose an outlined block")
-		return
 	for i in tray.size():
 		if not tray[i].is_empty() and Rect2(60 + i * 144, 862, 132, 136).has_point(p):
 			select_cutter(i)
 			checkpoint()
 			dragging = true
+			drag_from_card = true
+			drag_active = false
+			drag_start_pos = p
+			drag_origin = Vector2i(-99, -99)
 			return
 	if Rect2(BOARD_POS, Vector2(420, 540)).has_point(p):
 		dragging = true
@@ -287,8 +318,18 @@ func select_cutter(index: int) -> void:
 		for origin in CutterManager.placements(board, tray[index]):
 			aim_targets[origin] = true
 	targets = CutterManager.target_map(board, tray[index]) if index >= 0 and index < tray.size() and not tray[index].is_empty() else {}
+	if tutorial > 0 and not model.lesson_complete and index >= 0 and index < tray.size() and not tray[index].is_empty():
+		# An authored lesson teaches a specific outcome, never a false success
+		# from another legal punch. Endless placement remains unrestricted.
+		var goal: Vector2i = LessonBook.GOALS[model.lesson]
+		aim_targets = {goal: true}
+		targets.clear()
+		for point in CutterManager.hits(board, tray[index], goal):
+			targets[point] = goal
 
 func preview_origin() -> Vector2i:
+	if drag_from_card:
+		return drag_origin
 	return hover if precise else targets.get(hover, Vector2i(-99, -99))
 
 func preview() -> Dictionary:
@@ -299,21 +340,59 @@ func preview() -> Dictionary:
 		forecast_cache[origin] = model.forecast(selected, origin)
 	return forecast_cache[origin]
 
+# Card drags track the stamp centre above the finger. Snap only nearby legal
+# placements and retain the current choice until another is clearly closer.
 func move_pointer(p: Vector2) -> void:
+	pointer_pos = p
 	if busy or not overlay.is_empty():
 		return
 	hover = cell_at(p)
+	if not drag_from_card:
+		return
+	drag_active = drag_active or p.distance_to(drag_start_pos) >= 12
+	drag_origin = card_drag_origin(p) if drag_active else Vector2i(-99, -99)
+
+# Ease the lift near the lower edge so the bottom row remains easy to reach
+# without dragging back into the tray (which always cancels).
+func card_drag_center(p: Vector2) -> Vector2:
+	var lower_edge := clampf((p.y - (BOARD_POS.y + 420.0)) / 160.0, 0.0, 1.0)
+	return p - Vector2(0, lerpf(100.0, 40.0, lower_edge))
+
+func card_drag_origin(p: Vector2) -> Vector2i:
+	if selected < 0 or selected >= tray.size() or tray[selected].is_empty():
+		return Vector2i(-99, -99)
+	# Leaving the board horizontally or dragging back to the cards cancels.
+	if not Rect2(BOARD_POS - Vector2(18, 0), Vector2(456, 586)).has_point(p):
+		return Vector2i(-99, -99)
+	var extent := Vector2.ZERO
+	for offset in CutterManager.SHAPES[tray[selected].shape]:
+		extent.x = maxf(extent.x, offset.x + 1)
+		extent.y = maxf(extent.y, offset.y + 1)
+	var desired := (card_drag_center(p) - BOARD_POS) / CELL - extent / 2.0
+	var chosen := Vector2i(-99, -99)
+	var distance := 1.15 * 1.15
+	for origin in aim_targets:
+		var candidate_distance := desired.distance_squared_to(Vector2(origin))
+		if origin == drag_origin:
+			candidate_distance -= .18
+		if candidate_distance < distance:
+			distance = candidate_distance
+			chosen = origin
+	return chosen
 
 func release(p: Vector2) -> void:
 	if dragging and not busy and not over and overlay.is_empty():
-		hover = cell_at(p)
-		if Rect2(BOARD_POS, Vector2(420, 540)).has_point(p):
-			var origin := preview_origin()
+		move_pointer(p)
+		var origin := preview_origin()
+		var allowed := (drag_from_card and drag_active) or (not drag_from_card and Rect2(BOARD_POS, Vector2(420, 540)).has_point(p))
+		if allowed and selected >= 0 and selected < tray.size():
 			if CutterManager.hits(board, tray[selected], origin).size() >= 2:
 				place_cutter(origin)
+			elif drag_from_card:
+				message("Drag over 2+ blocks. Release to punch.")
 			else:
-				message("Cover two of your cutter's colour" if precise else "Tap an outlined %s block" % COLOR_NAMES[tray[selected].color].to_lower())
-	dragging = false
+				message("Cover at least two blocks. Colours can mix.")
+	cancel_gesture()
 
 func tick_pressure(delta: float) -> void:
 	if not pressure_enabled or busy or over or tutorial > 0 or not overlay.is_empty():
@@ -353,9 +432,7 @@ func place_cutter(origin: Vector2i) -> void:
 
 func present_events(events: Array, before: Dictionary, old_level: int, old_best: int) -> void:
 	busy = true
-	dragging = false
-	touch_id = -1
-	hover = Vector2i(-99, -99)
+	cancel_gesture()
 	combo = 0
 	turn_trace.clear()
 	last_summary.clear()
@@ -367,8 +444,11 @@ func present_events(events: Array, before: Dictionary, old_level: int, old_best:
 				anticipating = event.points.duplicate()
 				match_groups = event.groups.duplicate(true)
 				if event.wave == 0:
-					var name: String = COLOR_NAMES[board.at(event.points[0])]
-					set_phase("cut", "YOU CUT %d %s" % [event.points.size(), name], "Only the cutter's colour is removed.")
+					if event.get("perfect", false):
+						set_phase("cut", "PERFECT CUT!", "Full cutter · +%d bonus points" % event.get("bonus", 0))
+						celebrate("PERFECT CUT +%d" % event.get("bonus", 0))
+					else:
+						set_phase("cut", "PUNCH %d" % event.points.size(), "Every block inside the shape pops.")
 				else:
 					var title := "%d GROUPS OF 4+ CONNECTED" % event.groups.size()
 					if event.groups.size() == 1:
@@ -384,7 +464,8 @@ func present_events(events: Array, before: Dictionary, old_level: int, old_best:
 					elif event.source == "refill":
 						reason = "Restocking completed this group. Same 4+ rule."
 					set_phase("match", title, reason)
-				var hold := ((.48 if event.wave == 1 else .34) if event.wave > 0 else .07) if save.explain_clears else (.12 if event.wave > 0 else .0)
+				var teaching := tutorial > 0
+				var hold := (.34 if teaching else .19 if save.explain_clears else .07) if event.wave > 0 else .0
 				if hold > 0:
 					await get_tree().create_timer(hold).timeout
 				score += event.earned
@@ -405,7 +486,7 @@ func present_events(events: Array, before: Dictionary, old_level: int, old_best:
 				movements = event.moves
 				anim_t = 0
 				var tween := create_tween()
-				tween.tween_property(self, "anim_t", 1.0, .10 if save.reduced_motion else .23).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+				tween.tween_property(self, "anim_t", 1.0, .08 if save.reduced_motion else .16).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
 				await tween.finished
 				landing = event.moves.map(func(m: Dictionary) -> Vector2i: return m.to)
 				landing_time = .22 if not save.reduced_motion else 0.0
@@ -420,23 +501,26 @@ func present_events(events: Array, before: Dictionary, old_level: int, old_best:
 					detail = "Fresh blocks keep the board playable."
 				set_phase("supply", title, detail)
 				incoming = event.colors.duplicate()
-				await get_tree().create_timer(.16 if save.explain_clears else .06).timeout
+				await get_tree().create_timer(.10 if tutorial > 0 else .04).timeout
 				row_rising = true
 				rising_colors = event.colors.duplicate()
 				rise_t = 0
 				effects.sound("supply", 0)
 				var lift := create_tween()
-				lift.tween_property(self, "rise_t", 1.0, .12 if save.reduced_motion else .32).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN_OUT)
+				lift.tween_property(self, "rise_t", 1.0, .10 if save.reduced_motion else .24).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN_OUT)
 				await lift.finished
 				board.cells = event.cells.duplicate(true)
 				row_rising = false
 				rising_colors.clear()
 				incoming = event.next.duplicate()
+			"breathing":
+				if event.get("seconds", 0.0) > 0:
+					add_floater("+%.1fs" % event.seconds, Vector2(434, 252), ACCENT)
 			"fresh":
 				set_phase("supply", "FRESH CHANCE", "No legal cut remains. Fresh blocks keep you playing.")
-				await get_tree().create_timer(.20 if save.explain_clears else .05).timeout
+				await get_tree().create_timer(.08).timeout
 	last_summary = TurnSummary.from_events(events)
-	last_clear_time = 3.5 if last_summary.matched > 0 else 0.0
+	last_clear_time = 1.4 if last_summary.matched > 0 else 0.0
 	sync_model()
 	busy = false
 	set_phase("idle", "", "")
@@ -475,7 +559,7 @@ func pop_cells(points: Array, wave: int) -> void:
 	if wave > 0:
 		shake = minf(3.5, 1 + wave)
 	var tween := create_tween()
-	tween.tween_property(self, "anim_t", 1.0, .09 if save.reduced_motion else (.11 if wave == 0 else .16 if wave == 1 else .21)).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_IN)
+	tween.tween_property(self, "anim_t", 1.0, .07 if save.reduced_motion else (.08 if wave == 0 else .12 if wave == 1 else .16)).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_IN)
 	await tween.finished
 	board.remove(points)
 	shrinking.clear()
@@ -488,8 +572,10 @@ func undo_move() -> void:
 	var remaining := model.rise_remaining
 	reset_transients()
 	if model.restore(previous):
+		var time_since_cut := maxf(0, seconds - model.active_seconds)
+		var without_bonus := maxf(0, model.rise_remaining - time_since_cut)
 		model.active_seconds = maxf(seconds, model.active_seconds)
-		model.rise_remaining = minf(remaining, model.rise_remaining)
+		model.rise_remaining = minf(remaining, without_bonus)
 		undo_state = {}
 		sync_model()
 		checkpoint()
@@ -509,7 +595,7 @@ func finish_tutorial() -> void:
 	save.tutorial_done = true
 	save.save_data()
 	start_game()
-	message("Cut 2+. Match 4+. Beat the rising rows.", 4)
+	message("Punch blocks. Match 4. Make chains.", 3)
 
 # Targets are presentation only: undo and resumed rounds derive them from score.
 func target_after(value: int) -> int:
@@ -544,6 +630,20 @@ func cell_center(p: Vector2i) -> Vector2:
 func overlay_press(p: Vector2) -> void:
 	if busy:
 		return
+	if overlay == "home":
+		if Rect2(95, 570, 350, 64).has_point(p):
+			if has_saved_round():
+				overlay = "lesson" if model.lesson_complete else ""
+			else:
+				start_game()
+		elif has_saved_round() and Rect2(95, 650, 350, 56).has_point(p):
+			start_game()
+		elif Rect2(95, 724, 350, 52).has_point(p):
+			start_game(true)
+		elif Rect2(95, 790, 350, 52).has_point(p):
+			settings_return = "home"
+			overlay = "settings"
+		return
 	if overlay == "lesson":
 		if replay_rect.has_point(p):
 			next_lesson()
@@ -553,17 +653,30 @@ func overlay_press(p: Vector2) -> void:
 			undo_move()
 		elif replay_rect.has_point(p):
 			start_game()
-		return
-	if overlay == "resume":
-		if Rect2(95, 625, 350, 50).has_point(p):
-			start_game()
-		elif replay_rect.has_point(p):
-			overlay = "lesson" if model.lesson_complete else ""
-		return
-	if replay_rect.has_point(p):
-		overlay = "lesson" if model.lesson_complete else ""
+		elif Rect2(95, 775, 350, 50).has_point(p):
+			go_home()
 		return
 	if overlay == "pause":
+		if replay_rect.has_point(p):
+			overlay = "lesson" if model.lesson_complete else ""
+		elif Rect2(95, 407, 350, 50).has_point(p):
+			settings_return = "pause"
+			overlay = "settings"
+		elif Rect2(95, 469, 350, 50).has_point(p):
+			start_game()
+		elif Rect2(95, 531, 350, 50).has_point(p):
+			start_game(true)
+		elif Rect2(95, 593, 350, 50).has_point(p):
+			go_home()
+		elif Rect2(95, 655, 350, 34).has_point(p):
+			precise = not precise
+			hover = Vector2i(-99, -99)
+			overlay = ""
+		return
+	if replay_rect.has_point(p):
+		overlay = settings_return if overlay == "settings" else ("lesson" if model.lesson_complete else "")
+		return
+	if overlay == "settings":
 		if Rect2(95, 407, 169, 45).has_point(p):
 			save.sound = not save.sound
 		elif Rect2(276, 407, 169, 45).has_point(p):
@@ -574,9 +687,5 @@ func overlay_press(p: Vector2) -> void:
 			save.reduced_motion = not save.reduced_motion
 		elif Rect2(95, 566, 350, 45).has_point(p):
 			save.high_contrast = not save.high_contrast
-		elif Rect2(95, 625, 169, 50).has_point(p):
-			start_game()
-		elif Rect2(276, 625, 169, 50).has_point(p):
-			start_game(true)
 		save.save_data()
 		_sync_settings()

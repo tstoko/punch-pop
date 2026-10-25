@@ -56,21 +56,38 @@ static func rise_row(board: BoardManager, colors: Array) -> bool:
 	board.cells[BoardManager.HEIGHT - 1] = colors.duplicate()
 	return true
 
-# Preview once and keep it. Avoid rows that clear themselves on the current board.
+# Preview once and keep it. Favour small colour clusters that can be joined
+# by a deliberate punch, without awarding an automatic clear on arrival.
 static func pressure_row(board: BoardManager, rng: RandomNumberGenerator) -> Array:
 	var colors: Array = []
+	var best: Array = []
+	var best_links := -1
+	var tested := 0
 	for attempt in 64:
-		colors.clear()
-		for x in 7:
-			colors.append(rng.randi_range(0, 3))
+		colors = clustered_row(rng)
 		var trial := BoardManager.new()
 		trial.cells = board.snapshot()
 		if not rise_row(trial, colors):
 			return colors.duplicate()
-		if MatchSystem.groups(trial).is_empty() and not CutterManager.candidates(trial).is_empty():
+		if not MatchSystem.groups(trial).is_empty():
+			continue
+		tested += 1
+		if row_has_cascade(trial):
 			return colors.duplicate()
-	# Guaranteed fallback: a horizontal pair, no vertical attachment, and no
-	# horizontal run longer than three. It is playable and cannot auto-clear.
+		var links := 0
+		for x in 7:
+			if trial.at(Vector2i(x, 7)) == colors[x]:
+				links += 2
+			if x > 0 and colors[x] == colors[x - 1]:
+				links += 1
+		if links > best_links:
+			best_links = links
+			best = colors.duplicate()
+		if tested >= 8:
+			break
+	if not best.is_empty():
+		return best
+	# Guaranteed fallback: pairs, no vertical attachment and no run of four.
 	colors.clear()
 	for color in 4:
 		if color != board.at(Vector2i(0, 8)) and color != board.at(Vector2i(1, 8)):
@@ -86,3 +103,43 @@ static func pressure_row(board: BoardManager, rng: RandomNumberGenerator) -> Arr
 			choices.append(color)
 		colors.append(choices[rng.randi_range(0, choices.size() - 1)])
 	return colors
+
+static func clustered_row(rng: RandomNumberGenerator) -> Array:
+	var result: Array = []
+	if rng.randf() < .2:
+		for x in 7:
+			result.append(rng.randi_range(0, 3))
+		return result
+	while result.size() < 7:
+		var color := rng.randi_range(0, 3)
+		if not result.is_empty() and color == result.back():
+			color = (color + rng.randi_range(1, 3)) % 4
+		var length := mini(7 - result.size(), rng.randi_range(2, 3))
+		for cell in length:
+			result.append(color)
+	return result
+
+# Only the lower three rows changed their relationship to new supply. Search
+# that small region rather than forecasting every placement on a tall board.
+static func row_has_cascade(board: BoardManager) -> bool:
+	var upper_blocks := false
+	for x in 7:
+		if board.at(Vector2i(x, 7)) >= 0:
+			upper_blocks = true
+			break
+	if not upper_blocks:
+		return false
+	for shape in CutterManager.SHAPES.size():
+		var cutter := {"shape": shape, "color": -1}
+		for y in range(6, 9):
+			for x in 7:
+				var origin := Vector2i(x, y)
+				var hits := CutterManager.hits(board, cutter, origin)
+				if hits.size() < 2:
+					continue
+				var trial := BoardManager.new()
+				trial.cells = board.snapshot()
+				trial.remove(hits)
+				if not ComboManager.resolve(trial).waves.is_empty():
+					return true
+	return false

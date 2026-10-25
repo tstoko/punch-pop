@@ -9,13 +9,15 @@ const SHAPES := [
 const NAMES := ["CORNER", "LINE", "SQUARE"]
 
 static func hits(board: BoardManager, cutter: Dictionary, origin: Vector2i) -> Array:
+	if cutter.is_empty():
+		return []
 	var result: Array = []
 	for offset in SHAPES[cutter.shape]:
 		var p: Vector2i = origin + offset
 		# The whole stamp must fit; a stamp can cover empty or other-colour cells.
 		if not board.inside(p):
 			return []
-		if board.at(p) == cutter.color:
+		if board.at(p) >= 0 and (cutter.color == -1 or board.at(p) == cutter.color):
 			result.append(p)
 	return result
 
@@ -31,10 +33,9 @@ static func placements(board: BoardManager, cutter: Dictionary) -> Array:
 static func candidates(board: BoardManager) -> Array:
 	var result: Array = []
 	for shape in SHAPES.size():
-		for color in 4:
-			var cutter := {"shape": shape, "color": color}
-			if not placements(board, cutter).is_empty():
-				result.append(cutter)
+		var cutter := {"shape": shape, "color": -1}
+		if not placements(board, cutter).is_empty():
+			result.append(cutter)
 	return result
 
 static func generate(board: BoardManager, rng: RandomNumberGenerator) -> Dictionary:
@@ -75,17 +76,40 @@ static func diverse_refresh(board: BoardManager, tray: Array, rng: RandomNumberG
 		return []
 	var result: Array = [{}, {}, {}]
 	for i in 3:
-		if i < tray.size() and not tray[i].is_empty() and not placements(board, tray[i]).is_empty() and not result.has(tray[i]):
-			result[i] = tray[i].duplicate()
+		if i < tray.size() and not tray[i].is_empty():
+			var cutter := {"shape": tray[i].shape, "color": -1}
+			if not placements(board, cutter).is_empty() and not result.has(cutter):
+				result[i] = cutter
 	for i in 3:
 		if not result[i].is_empty():
 			continue
-		var colors: Array = []
-		for cutter in result:
-			if not cutter.is_empty():
-				colors.append(cutter.color)
 		var distinct := options.filter(func(c: Dictionary) -> bool: return not result.has(c))
-		var fresh_colors := distinct.filter(func(c: Dictionary) -> bool: return not colors.has(c.color))
-		var pool: Array = fresh_colors if not fresh_colors.is_empty() else distinct if not distinct.is_empty() else options
+		var pool: Array = distinct if not distinct.is_empty() else options
 		result[i] = pool[rng.randi_range(0, pool.size() - 1)].duplicate()
+	return result
+
+# A hand is finite: order the three punches, then draw another hand. A punch
+# that became unusable is discarded so an empty slot can never block play.
+static func hand_refresh(board: BoardManager, tray: Array, rng: RandomNumberGenerator) -> Array:
+	var result: Array = [{}, {}, {}]
+	var remaining := false
+	for i in mini(3, tray.size()):
+		if tray[i].is_empty():
+			continue
+		var cutter := {"shape": tray[i].shape, "color": -1}
+		if not placements(board, cutter).is_empty():
+			result[i] = cutter
+			remaining = true
+	if remaining:
+		return result
+	var options := candidates(board)
+	if options.is_empty():
+		return []
+	for i in range(options.size() - 1, 0, -1):
+		var other := rng.randi_range(0, i)
+		var held: Dictionary = options[i]
+		options[i] = options[other]
+		options[other] = held
+	for i in options.size():
+		result[i] = options[i].duplicate()
 	return result

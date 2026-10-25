@@ -1,7 +1,7 @@
 class_name RoundModel
 extends RefCounted
 
-const VERSION := 3
+const VERSION := 4
 var board := BoardManager.new()
 var rng := RandomNumberGenerator.new()
 var tray: Array = []
@@ -17,8 +17,8 @@ var over := false
 var fresh_batches := 0
 var cleared := 0
 var active_seconds := 0.0
-var rise_remaining := 8.0
-var rise_period := 8.0
+var rise_remaining := SupplySystem.INITIAL_INTERVAL
+var rise_period := SupplySystem.INITIAL_INTERVAL
 var timed_rows := 0
 var end_reason := ""
 
@@ -38,22 +38,22 @@ func reset(seed_value: int = -1, lesson_index: int = -1) -> void:
 	fresh_batches = 0
 	cleared = 0
 	active_seconds = 0
-	rise_remaining = 8.0
-	rise_period = 8.0
+	rise_remaining = SupplySystem.INITIAL_INTERVAL
+	rise_period = SupplySystem.INITIAL_INTERVAL
 	timed_rows = 0
 	end_reason = ""
 	if lesson >= 0:
 		tray = [LessonBook.build(board, lesson), {}, {}]
 	else:
 		LessonBook.endless_opening(board, rng)
-		tray = CutterManager.diverse_refresh(board, [{}, {}, {}], rng)
+		tray = CutterManager.hand_refresh(board, [{}, {}, {}], rng)
 	incoming = SpawnManager.pressure_row(board, rng)
 
 func snapshot() -> Dictionary:
 	return {"version": VERSION, "cells": board.snapshot(), "tray": tray.duplicate(true), "incoming": incoming.duplicate(), "score": score, "turns": turns, "combo": combo, "best_combo": best_combo, "selected": selected, "lesson": lesson, "lesson_complete": lesson_complete, "over": over, "fresh_batches": fresh_batches, "cleared": cleared, "active_seconds": active_seconds, "rise_remaining": rise_remaining, "rise_period": rise_period, "timed_rows": timed_rows, "end_reason": end_reason, "rng_seed": str(rng.seed), "rng_state": str(rng.state)}
 
 static func valid(data: Dictionary) -> bool:
-	if data.get("version") not in [2, VERSION] or not data.get("cells") is Array or data.cells.size() != 9:
+	if data.get("version") not in [2, 3, VERSION] or not data.get("cells") is Array or data.cells.size() != 9:
 		return false
 	for row in data.cells:
 		if not row is Array or row.size() != 7:
@@ -71,7 +71,7 @@ static func valid(data: Dictionary) -> bool:
 			return false
 		if cutter.is_empty():
 			continue
-		if not cutter.get("shape") is int or not cutter.get("color") is int or cutter.shape < 0 or cutter.shape > 2 or cutter.color < 0 or cutter.color > 3:
+		if not cutter.get("shape") is int or not cutter.get("color") is int or cutter.shape < 0 or cutter.shape > 2 or cutter.color < -1 or cutter.color > 3:
 			return false
 	for key in ["score", "turns", "combo", "best_combo", "selected", "lesson", "fresh_batches", "cleared"]:
 		if not data.get(key) is int:
@@ -84,11 +84,11 @@ static func valid(data: Dictionary) -> bool:
 		return false
 	if not valid_i64(data.rng_state) or not valid_i64(data.rng_seed):
 		return false
-	if data.version == VERSION:
+	if data.version >= 3:
 		for key in ["active_seconds", "rise_remaining", "rise_period"]:
 			if not (data.get(key) is float or data.get(key) is int) or not is_finite(float(data[key])):
 				return false
-		if data.active_seconds < 0 or data.rise_remaining < 0 or data.rise_remaining > 8.0 or data.rise_period < 3.5 or data.rise_period > 8.0 or data.rise_remaining > data.rise_period:
+		if data.active_seconds < 0 or data.rise_remaining < 0 or data.rise_remaining > SupplySystem.INITIAL_INTERVAL or data.rise_period < SupplySystem.MIN_INTERVAL or data.rise_period > SupplySystem.INITIAL_INTERVAL or data.rise_remaining > data.rise_period:
 			return false
 		if not data.get("timed_rows") is int or data.timed_rows < 0 or data.get("end_reason") not in ["", "timer", "scheduled", "refill"]:
 			return false
@@ -117,6 +117,10 @@ func restore(data: Dictionary) -> bool:
 		return false
 	board.cells = data.cells.duplicate(true)
 	tray = data.tray.duplicate(true)
+	if data.version < VERSION:
+		for cutter in tray:
+			if not cutter.is_empty():
+				cutter.color = -1
 	incoming = data.incoming.duplicate()
 	score = data.score
 	turns = data.turns
@@ -128,16 +132,38 @@ func restore(data: Dictionary) -> bool:
 	over = data.over
 	fresh_batches = data.fresh_batches
 	cleared = data.cleared
-	active_seconds = float(data.active_seconds) if data.version == VERSION else 0.0
-	rise_remaining = float(data.rise_remaining) if data.version == VERSION else 8.0
-	rise_period = float(data.rise_period) if data.version == VERSION else 8.0
-	timed_rows = data.timed_rows if data.version == VERSION else 0
-	end_reason = data.end_reason if data.version == VERSION else ""
+	active_seconds = float(data.active_seconds) if data.version >= 3 else 0.0
+	rise_remaining = float(data.rise_remaining) if data.version >= 3 else SupplySystem.INITIAL_INTERVAL
+	rise_period = float(data.rise_period) if data.version >= 3 else SupplySystem.INITIAL_INTERVAL
+	timed_rows = data.timed_rows if data.version >= 3 else 0
+	end_reason = data.end_reason if data.version >= 3 else ""
+	if data.version < VERSION and lesson >= 0:
+		# Old lessons depended on colour-selective punches. Restart only that
+		# lesson with its matching new layout; endless progress is untouched.
+		tray = [LessonBook.build(board, lesson), {}, {}]
+		selected = 0
+		score = 0
+		turns = 0
+		combo = 0
+		best_combo = 0
+		cleared = 0
+		fresh_batches = 0
+		lesson_complete = false
+		over = false
+		active_seconds = 0
+		rise_remaining = SupplySystem.INITIAL_INTERVAL
+		rise_period = SupplySystem.INITIAL_INTERVAL
+		timed_rows = 0
+		end_reason = ""
 	rng.seed = int(data.rng_seed)
 	rng.state = int(data.rng_state)
 	return true
 
 func forecast(slot: int, origin: Vector2i, include_board: bool = false) -> Dictionary:
+	if lesson >= 0 and origin != LessonBook.GOALS[lesson]:
+		return {}
+	if slot < 0 or slot >= tray.size() or tray[slot].is_empty():
+		return {}
 	var trial := BoardManager.new()
 	trial.cells = board.snapshot()
 	var hits := CutterManager.hits(trial, tray[slot], origin)
@@ -145,12 +171,20 @@ func forecast(slot: int, origin: Vector2i, include_board: bool = false) -> Dicti
 		return {}
 	trial.remove(hits)
 	var result := ComboManager.resolve(trial)
-	var prediction := {"hits": hits, "waves": result.waves.size(), "score": ComboManager.cut_score(hits.size()) + result.score}
+	var bonus := ComboManager.perfect_bonus(hits.size(), CutterManager.SHAPES[tray[slot].shape].size())
+	var matched := 0
+	for wave in result.waves:
+		matched += wave.cells.size()
+	var time_bonus := SupplySystem.chain_time(result.waves.size()) if lesson < 0 else 0.0
+	time_bonus = minf(time_bonus, maxf(0, rise_period - rise_remaining))
+	var prediction := {"hits": hits, "waves": result.waves.size(), "matched": matched, "score": ComboManager.cut_score(hits.size()) + bonus + result.score, "perfect": bonus > 0, "bonus": bonus, "time_bonus": time_bonus}
 	if include_board:
 		prediction.cells = trial.snapshot()
 	return prediction
 
 func play(slot: int, origin: Vector2i) -> Array:
+	if lesson >= 0 and origin != LessonBook.GOALS[lesson]:
+		return []
 	if over or lesson_complete or (lesson < 0 and rise_remaining <= 0) or slot < 0 or slot >= tray.size() or tray[slot].is_empty():
 		return []
 	var hits := CutterManager.hits(board, tray[slot], origin)
@@ -158,15 +192,22 @@ func play(slot: int, origin: Vector2i) -> Array:
 		return []
 	var events: Array = []
 	combo = 0
-	remove_event(events, hits, 0)
+	var bonus := ComboManager.perfect_bonus(hits.size(), CutterManager.SHAPES[tray[slot].shape].size())
+	remove_event(events, hits, 0, [], "player", bonus)
 	resolve_events(events)
+	if lesson < 0:
+		var earned_time := minf(SupplySystem.chain_time(combo), maxf(0, rise_period - rise_remaining))
+		if earned_time > 0:
+			rise_remaining += earned_time
+			events.append({"type": "breathing", "seconds": earned_time})
 	turns += 1
 	if lesson >= 0:
 		lesson_complete = true
 		return events
 	if not replenish(events, slot):
 		return events
-	selected = slot
+	if not tray[slot].is_empty():
+		selected = slot
 	return events
 
 # Only decision time advances this clock. Menus/animations never call this.
@@ -207,16 +248,19 @@ func replenish(events: Array, used_slot: int = -1) -> bool:
 			break
 	if used_slot >= 0:
 		tray[used_slot] = {}
-	tray = CutterManager.diverse_refresh(board, tray, rng)
+	tray = CutterManager.hand_refresh(board, tray, rng)
 	if tray.is_empty():
 		# A rare regenerated sparse board gets an explicit, guaranteed playable batch.
 		incoming = SupplySystem.recovery_row(board, rng, turns)
 		if not drop(events, "refill"):
 			return false
-		tray = CutterManager.diverse_refresh(board, [], rng)
+		tray = CutterManager.hand_refresh(board, [], rng)
 		assert(not tray.is_empty(), "Recovery row must leave a playable board")
 	if selected < 0 or selected >= tray.size() or tray[selected].is_empty():
-		selected = 0
+		for i in tray.size():
+			if not tray[i].is_empty():
+				selected = i
+				break
 	return true
 
 func drop(events: Array, reason: String = "scheduled") -> bool:
@@ -233,13 +277,14 @@ func drop(events: Array, reason: String = "scheduled") -> bool:
 	row_event.next = incoming.duplicate()
 	return true
 
-func remove_event(events: Array, points: Array, wave: int, groups: Array = [], source: String = "player") -> void:
+func remove_event(events: Array, points: Array, wave: int, groups: Array = [], source: String = "player", bonus: int = 0) -> void:
 	var earned := ComboManager.cut_score(points.size()) if wave == 0 else ComboManager.match_score(points.size(), wave)
+	earned += bonus
 	score += earned
 	cleared += points.size()
 	combo = maxi(combo, wave)
 	best_combo = maxi(best_combo, wave)
-	events.append({"type": "pop", "points": points.duplicate(), "wave": wave, "earned": earned, "groups": groups.duplicate(true), "source": source})
+	events.append({"type": "pop", "points": points.duplicate(), "wave": wave, "earned": earned, "groups": groups.duplicate(true), "source": source, "perfect": bonus > 0, "bonus": bonus})
 	board.remove(points)
 
 func resolve_events(events: Array, source: String = "cut") -> void:

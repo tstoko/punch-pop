@@ -5,17 +5,21 @@ func _initialize() -> void:
 
 func capture() -> void:
 	var game = load("res://scenes/main.tscn").instantiate()
-	game.save = SaveStore.new("/private/tmp/punch-pop-preview-v5.cfg")
+	game.save = SaveStore.new("/private/tmp/punch-pop-preview-v7.cfg")
 	game.pressure_enabled = false
 	root.add_child(game)
 	await process_frame
+	await snap("home")
+	# Teaching captures intentionally hold the explanatory stages for inspection.
+	game.save.explain_clears = true
 	game.start_game(true)
 	await snap("lesson-one")
 	game.model.reset(20261022, 2)
 	game.sync_model()
-	game.hover = Vector2i(0, 6)
+	game.precise = true
+	game.hover = Vector2i(0, 5)
 	await snap("lesson-chain")
-	game.place_cutter(Vector2i(0, 6))
+	game.place_cutter(Vector2i(0, 5))
 	while game.busy and not (game.phase == "match" and game.active_wave == 1):
 		await process_frame
 	await snap("auto-match-preview")
@@ -38,6 +42,9 @@ func capture() -> void:
 	game.overlay = "help"
 	await snap("help-preview")
 	game.overlay = "pause"
+	await snap("pause-preview")
+	game.settings_return = "pause"
+	game.overlay = "settings"
 	await snap("settings-preview")
 	game.overlay = ""
 	game.save.high_contrast = true
@@ -46,8 +53,8 @@ func capture() -> void:
 	await game.place_cutter(game.targets.values()[0])
 	await create_timer(1).timeout
 	await snap("after-chain")
-	game.overlay = "resume"
-	await snap("resume-preview")
+	game.overlay = "home"
+	await snap("continue-preview")
 	game.overlay = ""
 	game.model.rise_remaining = 1.4
 	game.hover = Vector2i(-99, -99)
@@ -73,7 +80,7 @@ func capture() -> void:
 	game.model.board.put(Vector2i(1, 8), 0)
 	for y in [6, 7, 8]:
 		game.model.board.put(Vector2i(3, y), 1)
-	game.model.tray = [{"shape": 1, "color": 0}, {}, {}]
+	game.model.tray = [{"shape": 1, "color": -1}, {}, {}]
 	game.model.turns = 1
 	game.model.incoming = [0, 1, 2, 1, 3, 0, 2]
 	game.sync_model()
@@ -99,4 +106,4 @@ func snap(name: String) -> void:
 	for i in 3:
 		await process_frame
 	await RenderingServer.frame_post_draw
-	root.get_texture().get_image().save_png("res://docs/%s.png" % name)
+	root.get_texture().get_image().save_png("res://docs/v7-%s.png" % name)

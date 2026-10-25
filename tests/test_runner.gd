@@ -18,12 +18,15 @@ func run() -> void:
 	test_gravity()
 	test_matches()
 	test_combo()
+	test_perfect_cuts()
+	test_shape_punches_and_breathing()
 	test_spawn()
 	test_generation()
 	test_round_model()
 	test_clear_explanations()
 	test_save_validation()
 	test_pressure_model()
+	await test_home_and_drag()
 	await test_game_flow()
 	await test_live_pressure()
 	check(game_flow_completed, "Controller suite reached cleanup without a script error")
@@ -108,6 +111,128 @@ func test_combo() -> void:
 	check(ComboManager.cut_score(3) == 30, "Direct cutter scores 10 per jelly")
 	check(ComboManager.resolve(board).score == 0, "Empty board awards no phantom points")
 
+func test_perfect_cuts() -> void:
+	check(ComboManager.perfect_bonus(2, 3) == 0 and ComboManager.perfect_bonus(3, 4) == 0, "Partial footprints never receive a perfect bonus")
+	check(ComboManager.perfect_bonus(3, 3) == 15 and ComboManager.perfect_bonus(4, 4) == 20, "Full footprints receive a modest five points per block")
+	for shape in [0, 1, 2]:
+		var model := RoundModel.new()
+		model.reset(600 + shape)
+		model.board.clear()
+		var origin := Vector2i(0, 8) if shape == 1 else Vector2i(0, 7)
+		var count: int = CutterManager.SHAPES[shape].size()
+		for i in count:
+			model.board.put(origin + CutterManager.SHAPES[shape][i], i % 4)
+		# Preserve another legal pair so the receipt contains only this cut.
+		model.board.put(Vector2i(4, 8), 1)
+		model.board.put(Vector2i(5, 8), 1)
+		model.tray = [{"shape": shape, "color": -1}, {}, {}]
+		var before := model.snapshot()
+		var prediction := model.forecast(0, origin)
+		check(prediction.perfect and prediction.bonus == count * 5 and prediction.score == count * 15, "Perfect cut forecast includes the complete bonus")
+		check(model.snapshot() == before, "Perfect cut forecast is mutation-free")
+		var events := model.play(0, origin)
+		var receipt := TurnSummary.from_events(events)
+		check(receipt.perfect and receipt.bonus == count * 5 and receipt.score == prediction.score and model.score == prediction.score, "Perfect forecast, events, receipt and awarded points agree")
+		var after := model.snapshot()
+		check(model.restore(before) and model.score == 0, "Restoring undo removes the perfect bonus with the cut")
+		model.play(0, origin)
+		check(model.snapshot() == after, "Perfect cut replay preserves score and random future")
+		var clone := RoundModel.new()
+		check(clone.restore(after) and clone.score == count * 15, "Perfect bonuses survive saving without additional checkpoint fields")
+	check(TurnSummary.from_events([{"type": "pop", "points": [Vector2i.ZERO, Vector2i.ONE], "wave": 0, "earned": 20, "groups": []}]).bonus == 0, "Receipts accept older events without bonus metadata")
+
+func test_shape_punches_and_breathing() -> void:
+	check(SupplySystem.chain_time(0) == 0.0 and SupplySystem.chain_time(1) == 0.0, "No time reward is given without a multiwave chain")
+	check(SupplySystem.chain_time(2) == .5 and SupplySystem.chain_time(3) == 1.0, "Real chains earn half a second per wave after the first")
+	check(SupplySystem.chain_time(4) == 1.5 and SupplySystem.chain_time(20) == 1.5, "Long chains cannot exceed the one-and-a-half-second rescue cap")
+	for lesson_index in [1, 2]:
+		var training := RoundModel.new()
+		training.reset(710, lesson_index)
+		var unchanged := training.snapshot()
+		var wrong: Vector2i = CutterManager.placements(training.board, training.tray[0]).filter(func(p: Vector2i) -> bool: return p != LessonBook.GOALS[lesson_index])[0]
+		check(training.forecast(0, wrong).is_empty() and training.play(0, wrong).is_empty(), "Training rejects valid punches outside its authored teaching goal")
+		check(training.snapshot() == unchanged and not training.lesson_complete, "A wrong training punch never mutates or completes the lesson")
+	var board := BoardManager.new()
+	for x in 3:
+		board.put(Vector2i(x, 8), x)
+	check(CutterManager.hits(board, {"shape": 1, "color": -1}, Vector2i(0, 8)).size() == 3, "Shape punches remove every occupied colour inside the footprint")
+	check(CutterManager.hits(board, {"shape": 1, "color": 0}, Vector2i(0, 8)).size() == 1, "Historical explicit-colour cutter geometry remains compatible")
+	var model := RoundModel.new()
+	model.reset(700, 2)
+	model.lesson = -1
+	model.advance_clock(4.0)
+	var prediction := model.forecast(0, Vector2i(0, 5))
+	check(prediction.waves == 2 and prediction.matched >= 8 and prediction.time_bonus == .5, "A two-wave punch forecasts half a second of breathing time")
+	var events := model.play(0, Vector2i(0, 5))
+	var receipt := TurnSummary.from_events(events)
+	check(receipt.time_bonus == prediction.time_bonus and model.rise_remaining == 8.5, "Only actual cut-created multiwave chains award the forecast breathing time")
+	model.reset(700, 2)
+	model.lesson = -1
+	model.advance_clock(.25)
+	prediction = model.forecast(0, Vector2i(0, 5))
+	check(prediction.time_bonus == .25, "Breathing forecasts are capped by the current period")
+	events = model.play(0, Vector2i(0, 5))
+	check(TurnSummary.from_events(events).time_bonus == .25 and model.rise_remaining == model.rise_period, "Fast chains cannot bank time beyond one countdown")
+	model.reset(700, 1)
+	model.lesson = -1
+	model.advance_clock(4.0)
+	prediction = model.forecast(0, LessonBook.GOALS[1])
+	check(prediction.waves == 1 and prediction.time_bonus == 0.0, "An ordinary one-wave match buys board space without granting extra thinking time")
+	events = model.play(0, LessonBook.GOALS[1])
+	check(TurnSummary.from_events(events).time_bonus == 0.0 and model.rise_remaining == 8.0, "Ordinary match execution agrees with its zero-time forecast")
+	model.reset(701)
+	var legacy := model.snapshot()
+	legacy.version = 3
+	legacy.rise_period = 3.5
+	legacy.rise_remaining = 2.25
+	legacy.score = 1234
+	var legacy_board := BoardManager.new()
+	for x in 3:
+		legacy_board.put(Vector2i(x, 8), 0)
+	legacy_board.put(Vector2i(5, 8), 1)
+	legacy_board.put(Vector2i(6, 8), 1)
+	legacy.cells = legacy_board.snapshot()
+	legacy.tray = [{"shape": 1, "color": 0}, {"shape": 0, "color": 0}, {"shape": 2, "color": 1}]
+	legacy.selected = 0
+	var clone := RoundModel.new()
+	check(clone.restore(legacy) and clone.score == 1234 and clone.rise_period == 3.5 and clone.rise_remaining == 2.25, "Version-three saves preserve scores and shorter historical countdowns")
+	check(str(clone.rng.state) == legacy.rng_state and clone.tray.all(func(c: Dictionary) -> bool: return c.is_empty() or c.color == -1), "Checkpoint migration preserves RNG and makes the tray shape-only")
+	var old_lesson := legacy.duplicate(true)
+	old_lesson.lesson = 2
+	old_lesson.lesson_complete = true
+	check(clone.restore(old_lesson) and clone.lesson == 2 and not clone.lesson_complete and clone.score == 0 and clone.turns == 0, "Legacy training restarts its corresponding lesson with the new shape-punch rules")
+	check(clone.forecast(0, Vector2i(0, 5)).waves == 2 and RoundModel.valid(clone.snapshot()), "Migrated training has the correct new teaching layout and a valid checkpoint")
+	model.reset(702)
+	model.board.clear()
+	for x in 7:
+		for y in range(5, 9):
+			model.board.put(Vector2i(x, y), (x + 2 * y) % 4)
+	model.tray = [{"shape": 0, "color": -1}, {"shape": 1, "color": -1}, {"shape": 2, "color": -1}]
+	model.play(0, Vector2i(0, 7))
+	check(model.tray[0].is_empty() and not model.tray[1].is_empty() and not model.tray[2].is_empty(), "A used punch leaves an empty slot until the remaining hand is spent")
+	check(model.selected != 0 and RoundModel.valid(model.snapshot()), "Selection advances to an available punch and a partial hand remains saveable")
+	model.play(1, Vector2i(3, 8))
+	check(model.tray[0].is_empty() and model.tray[1].is_empty() and not model.tray[2].is_empty(), "The second punch still does not replenish spent slots")
+	model.play(2, Vector2i(4, 6))
+	check(model.tray.all(func(c: Dictionary) -> bool: return not c.is_empty()) and model.tray[0] != model.tray[1] and model.tray[1] != model.tray[2], "Spending the final punch deals a fresh distinct hand")
+	var multichain_openings := 0
+	var unique := {}
+	for seed_value in 20:
+		model.reset(9000 + seed_value)
+		unique[model.board.snapshot()] = true
+		check(model.tray.all(func(c: Dictionary) -> bool: return not c.is_empty() and c.color == -1) and CutterManager.candidates(model.board).size() == 3, "New openings offer all three shape-only punches")
+		check(LessonBook.has_cascade(model.board), "Every opening has a discoverable match opportunity")
+		if LessonBook.has_cascade(model.board, 2):
+			multichain_openings += 1
+		for cutter in model.tray:
+			var full := false
+			for origin in CutterManager.placements(model.board, cutter):
+				if CutterManager.hits(model.board, cutter, origin).size() == CutterManager.SHAPES[cutter.shape].size():
+					full = true
+					break
+			check(full, "Every offered shape has a reachable perfect punch on normal settled terrain")
+	check(unique.size() == 20 and multichain_openings > 0, "Openings vary by seed and include discoverable multiwave chains")
+
 func test_spawn() -> void:
 	var board := BoardManager.new()
 	var colors := [0, 1, 2, 3, 0, 1, 2]
@@ -148,6 +273,83 @@ func test_generation() -> void:
 	var empty := BoardManager.new()
 	check(CutterManager.generate(empty, rng).is_empty(), "No invented moves on empty board")
 
+func test_home_and_drag() -> void:
+	var path := "/private/tmp/punch_pop_v6_test_home_drag.cfg"
+	DirAccess.remove_absolute(path)
+	var game = load("res://scenes/main.tscn").instantiate()
+	game.save = SaveStore.new(path)
+	root.add_child(game)
+	await process_frame
+	var initial: Dictionary = game.model.snapshot()
+	game.tick_pressure(.25)
+	check(game.overlay == "home" and not game.has_saved_round() and game.model.snapshot() == initial, "First launch opens a home menu with its clock frozen")
+	game.overlay_press(Vector2(270, 816))
+	check(game.overlay == "settings" and game.settings_return == "home", "Home settings remember the menu they came from")
+	game.tick_pressure(.25)
+	game.overlay_press(game.replay_rect.get_center())
+	check(game.overlay == "home" and game.model.snapshot() == initial, "Returning from settings keeps the home clock and board unchanged")
+	game.overlay_press(Vector2(270, 750))
+	game.pressure_enabled = false
+	check(game.overlay.is_empty() and game.model.lesson == 0, "Home training opens the first untimed lesson")
+	var before: Dictionary = game.model.snapshot()
+	var origin := Vector2i(2, 8)
+	# The preview is lifted above the finger. Stay above the tray; nearby
+	# snapping keeps the bottom row reachable.
+	var pointer: Vector2 = game.BOARD_POS + (Vector2(origin) + Vector2(1.5, .5)) * game.CELL + Vector2(0, 70)
+	var card := Vector2(126, 930)
+	var card_top := Vector2(190, 880)
+	game.press(card_top)
+	game.release(card_top)
+	check(game.model.snapshot() == before and not game.busy and not game.dragging, "Tapping the top of a cutter card only selects it and never cuts bottom-row blocks")
+	game.press(Vector2(190, 866))
+	game.release(Vector2(190, 858))
+	check(game.model.snapshot() == before and not game.busy, "Small movements across the tray edge do not activate a card drag")
+	game.press(card)
+	check(game.dragging and game.drag_from_card and game.preview().is_empty(), "Card press begins a drag without a remote board preview")
+	game.move_pointer(pointer)
+	check(game.preview_origin() == origin and game.preview().hits.size() == 3, "Card drag previews the intended legal footprint above the finger")
+	game.move_pointer(pointer + Vector2(3, 2))
+	check(game.preview_origin() == origin and game.model.snapshot() == before, "Small finger movements preserve the preview without committing a cut")
+	game.move_pointer(game.BOARD_POS + Vector2(120, 100))
+	check(game.preview().is_empty(), "Dragging over empty space never snaps to a distant cut")
+	game.move_pointer(pointer)
+	game.release(Vector2(game.BOARD_POS.x - 40, pointer.y))
+	check(not game.dragging and not game.drag_from_card and game.model.snapshot() == before, "Releasing outside the board cancels a card drag without spending a turn")
+	game.press(card)
+	game.move_pointer(pointer)
+	game.move_pointer(Vector2(pointer.x, 880))
+	check(game.preview().is_empty(), "Returning a dragged cutter to the tray removes the preview")
+	game.release(Vector2(pointer.x, 880))
+	check(game.model.snapshot() == before and not game.dragging, "Releasing a cutter back in its tray cancels the cut")
+	game.press(card)
+	game.move_pointer(pointer)
+	game.release(Vector2(pointer.x, game.BOARD_POS.y + 660))
+	check(game.model.snapshot() == before and not game.dragging, "Dragging back below the board cancels without cutting")
+	game.press(card)
+	game.move_pointer(pointer)
+	game.notification(Node.NOTIFICATION_APPLICATION_FOCUS_OUT)
+	check(game.overlay == "pause" and not game.drag_from_card and game.preview().is_empty() and game.model.snapshot() == before, "Focus loss cancels a card drag and preserves the round")
+	game.overlay = ""
+	game.press(card)
+	game.move_pointer(pointer)
+	game.release(pointer)
+	while game.busy:
+		await process_frame
+	check(game.model.turns == 1 and game.model.lesson_complete and game.overlay == "lesson", "Releasing a valid card drag commits exactly one complete cut")
+	game.model.over = true
+	game.sync_model()
+	game.go_home()
+	game.overlay_press(Vector2(270, 816))
+	var escape := InputEventKey.new()
+	escape.keycode = KEY_ESCAPE
+	escape.pressed = true
+	game._input(escape)
+	check(game.over and game.overlay == "home", "Escape returns from home settings even after game over")
+
+	game.queue_free()
+	await process_frame
+	DirAccess.remove_absolute(path)
+
 func test_game_flow() -> void:
 	var game = load("res://scenes/main.tscn").instantiate()
 	game.save = SaveStore.new("/private/tmp/punch_pop_v5_test_punch_pop_v2.cfg")
@@ -163,13 +365,13 @@ func test_game_flow() -> void:
 	game.reset_transients()
 	check(game.effects.particles.is_empty() and game.effects.rings.is_empty(), "Restart and undo remove stale visual effects")
 	game.save.explain_clears = true
-	game.overlay = "pause"
+	game.overlay = "settings"
 	await process_frame
 	check(not game.effects.visible, "Particles cannot obscure help or pause menus")
 	game.overlay_press(Vector2(270, 482))
-	check(not game.save.explain_clears, "Pause control enables quick clears")
+	check(not game.save.explain_clears, "Settings control enables quick clears")
 	game.overlay_press(Vector2(270, 482))
-	check(game.save.explain_clears, "Pause control restores readable explanations")
+	check(game.save.explain_clears, "Settings control restores readable explanations")
 	game.overlay = ""
 	await process_frame
 	game.phase_changed.connect(func(stage: String) -> void:
@@ -181,14 +383,15 @@ func test_game_flow() -> void:
 	for index in 3:
 		check(game.model.lesson == index and game.tutorial == index + 1, "Authored lesson starts at the right step")
 		check(RoundModel.valid(game.model.snapshot()), "Lesson checkpoint is valid and settled")
-		var target: Vector2i = game.targets.keys()[0]
+		var target: Vector2i = [Vector2i(2, 8), Vector2i(0, 7), Vector2i(0, 5)][index]
+		game.precise = true
 		game.press(game.cell_center(target))
 		check(not game.busy and game.turns == 0, "Press previews without committing")
 		game.release(game.cell_center(target))
 		while game.busy:
 			await process_frame
 		check(game.overlay == "lesson" and game.model.lesson_complete, "Lesson shows a clear success state")
-		check(game.combo >= index if index > 0 else game.score == 20, "Lessons demonstrate cut, match, then two-wave chain")
+		check(game.combo >= index if index > 0 else game.score == 45, "Lessons demonstrate cut, match, then two-wave chain")
 		game.next_lesson()
 	check(game.tutorial == 0 and game.save.tutorial_done, "Finishing all lessons enters endless and saves completion")
 	check(not game.targets.is_empty(), "Endless starts with usable cutters")
@@ -196,12 +399,13 @@ func test_game_flow() -> void:
 	# Chain animation is tested on authored terrain, independent of random openings.
 	game.model.board.clear()
 	LessonBook.chain_pocket(game.model.board)
-	game.model.tray = CutterManager.diverse_refresh(game.model.board, [{"shape": 1, "color": 3}, {}, {}], game.model.rng)
+	game.model.tray = CutterManager.diverse_refresh(game.model.board, [{"shape": 0, "color": -1}, {}, {}], game.model.rng)
 	game.sync_model()
 	game.checkpoint()
-	var target := Vector2i(0, 6)
+	var target := Vector2i(0, 5)
+	game.precise = true
 	var before: Dictionary = game.model.snapshot()
-	var prediction: Dictionary = game.model.forecast(game.selected, game.targets[target])
+	var prediction: Dictionary = game.model.forecast(game.selected, target)
 	check(prediction.waves >= 2, "Opening forecast predicts the two-wave chain")
 	game.hover = target
 	check(game.preview().score == prediction.score, "Displayed forecast uses the same resolver as play")
@@ -225,9 +429,9 @@ func test_game_flow() -> void:
 	check(game.model.snapshot() == before, "Undo restores the exact board, score, tray, turn and RNG state")
 	check(game.undo_state.is_empty(), "Undo cannot rewind an unlimited history")
 	game.precise = true
-	game.hover = Vector2i(0, 6)
-	check(game.preview_origin() == Vector2i(0, 6) and not game.preview().is_empty(), "Aim mode exposes exact legal stamp origins")
-	await game.place_cutter(Vector2i(0, 6))
+	game.hover = Vector2i(0, 5)
+	check(game.preview_origin() == Vector2i(0, 5) and not game.preview().is_empty(), "Aim mode exposes exact legal stamp origins")
+	await game.place_cutter(Vector2i(0, 5))
 	check(game.model.snapshot() == after, "Replaying after undo produces identical future cutters and rows")
 	var loaded := SaveStore.new("/private/tmp/punch_pop_v5_test_punch_pop_v2.cfg")
 	loaded.load_data()
@@ -237,8 +441,8 @@ func test_game_flow() -> void:
 	resumed.pressure_enabled = false
 	root.add_child(resumed)
 	await process_frame
-	check(resumed.overlay == "resume" and resumed.model.snapshot() == after, "A new game instance restores the exact checkpoint")
-	resumed.overlay_press(Vector2(270, 730))
+	check(resumed.overlay == "home" and resumed.model.snapshot() == after, "A new game instance restores the exact checkpoint")
+	resumed.overlay_press(Vector2(270, 602))
 	check(resumed.overlay.is_empty(), "Continue returns to the saved board")
 	resumed.undo_move()
 	check(resumed.model.snapshot() == before, "Undo also survives quitting and resuming")
@@ -276,9 +480,10 @@ func test_game_flow() -> void:
 	resumed.model.turns = 1
 	resumed.sync_model()
 	await resumed.place_cutter(Vector2i(0, 8))
-	check(resumed.over and resumed.overlay == "over", "Live overflow displays the game-over state")
-	resumed.undo_move()
-	check(not resumed.over and resumed.turns == 1 and resumed.score == 0, "Undo can recover from game over")
+	check(not resumed.over and not resumed.undo_state.is_empty(), "A full column can still be punched before the clock expires")
+	resumed.model.rise_remaining = 0
+	await resumed.rise_from_timer()
+	check(resumed.over and resumed.overlay == "over" and resumed.undo_state.is_empty(), "Timed overflow displays game over and cannot be undone")
 	resumed.queue_free()
 	game.queue_free()
 	await process_frame
@@ -305,9 +510,8 @@ func test_round_model() -> void:
 	corrupt.rng_state = "99999999999999999999999999999"
 	check(not RoundModel.valid(corrupt), "Overflowed RNG strings are rejected")
 	var stranded := BoardManager.new()
-	for y in range(6, 9):
-		for x in 7:
-			stranded.put(Vector2i(x, y), (x + 2 * y) % 4)
+	stranded.put(Vector2i(0, 8), 0)
+	stranded.put(Vector2i(6, 8), 1)
 	check(CutterManager.candidates(stranded).is_empty(), "Recovery fixture has no legal cutter")
 	var recovery := SupplySystem.recovery_row(stranded, model.rng, 10)
 	SpawnManager.rise_row(stranded, recovery)
@@ -338,7 +542,7 @@ func test_round_model() -> void:
 	events = model.play(0, Vector2i(0, 8))
 	check(model.board.occupied() == 2 and model.turns == 48, "A good cut preserves breathing room even at late pressure levels")
 	check(not events.any(func(e: Dictionary) -> bool: return e.type in ["row", "fresh"]), "A sparse playable board receives no surprise refill")
-	check(model.incoming == previewed and model.rise_remaining == 8, "Cuts preserve the preview and pending countdown")
+	check(model.incoming == previewed and model.rise_remaining == 12, "Cuts preserve the preview and pending countdown")
 	check(RoundModel.valid(model.snapshot()), "Sparse boards retain a playable saved tray")
 	# Overflow is still real and atomic.
 	model.reset(55)
@@ -350,7 +554,10 @@ func test_round_model() -> void:
 	model.tray = [{"shape": 1, "color": 0}, {}, {}]
 	model.turns = 1
 	model.play(0, Vector2i(0, 8))
-	check(model.over and SupplySystem.height(model.board, 6) == 9, "A stranded full column blocks recovery without partial insertion")
+	check(not model.over and SupplySystem.height(model.board, 6) == 9, "A full column remains punchable without a surprise recovery row")
+	model.advance_clock(model.rise_remaining)
+	model.expire_clock()
+	check(model.over and model.end_reason == "timer", "A full column loses only when the pending timed row arrives")
 	check(SupplySystem.due_rows(1) == 0 and SupplySystem.due_rows(2) == 0, "Cuts never schedule pressure rows")
 	check(SupplySystem.due_rows(36) == 0 and SupplySystem.due_rows(48) == 0, "Late cuts never add hidden pressure rows")
 	var openings := {}
@@ -363,7 +570,7 @@ func test_round_model() -> void:
 		for turn in 70:
 			if model.over:
 				break
-			var slot := turn % 3
+			var slot: int = model.selected
 			var targets := CutterManager.target_map(model.board, model.tray[slot])
 			check(not targets.is_empty(), "Every offered cutter remains usable")
 			var origin: Vector2i = targets.values()[0]
@@ -417,7 +624,7 @@ func test_clear_explanations() -> void:
 	model.reset(20261022, 2)
 	var shown := BoardManager.new()
 	shown.cells = model.board.snapshot()
-	var events := model.play(0, Vector2i(0, 6))
+	var events := model.play(0, Vector2i(0, 5))
 	var earned := 0
 	for e in events:
 		if e.type == "pop":
@@ -455,7 +662,7 @@ func test_clear_explanations() -> void:
 	check(drop_events.any(func(e: Dictionary) -> bool: return e.type == "pop" and e.wave > 0 and e.source == "new_row"), "A row-created match is labelled as caused by incoming blocks")
 	check(drop_events.any(func(e: Dictionary) -> bool: return e.type == "row" and e.reason == "timer"), "Timer drops are distinct from recovery refills")
 	var store := SaveStore.new("/private/tmp/punch_pop_v5_test_clear_guide.cfg")
-	check(store.explain_clears, "Readable clear explanations are enabled by default")
+	check(not store.explain_clears, "Quick clear timing is the new-player default")
 	store.explain_clears = false
 	store.save_data()
 	var loaded := SaveStore.new("/private/tmp/punch_pop_v5_test_clear_guide.cfg")
@@ -464,6 +671,20 @@ func test_clear_explanations() -> void:
 	DirAccess.remove_absolute(store.path)
 
 func test_pressure_model() -> void:
+	var near_match := BoardManager.new()
+	for x in 7:
+		near_match.put(Vector2i(x, 8), [0, 1, 0, 1, 2, 2, 3][x])
+	var supply_rng := RandomNumberGenerator.new()
+	supply_rng.seed = 703
+	var opportunities := 0
+	for sample in 20:
+		var generated := SpawnManager.pressure_row(near_match, supply_rng)
+		var raised := BoardManager.new()
+		raised.cells = near_match.snapshot()
+		SpawnManager.rise_row(raised, generated)
+		check(MatchSystem.groups(raised).is_empty(), "Clustered supply creates no automatic match on arrival")
+		opportunities += 1 if SpawnManager.row_has_cascade(raised) else 0
+	check(opportunities > 0, "Clustered supply creates genuine punch-to-match opportunities on a sparse board")
 	var board := BoardManager.new()
 	for y in range(5, 9):
 		for x in 7:
@@ -479,7 +700,7 @@ func test_pressure_model() -> void:
 	check(not SpawnManager.rise_row(board, colors) and board.snapshot() == old, "Ceiling overflow cannot partially erase or shift blocks")
 	var model := RoundModel.new()
 	model.reset(20261022)
-	check(not model.advance_clock(7.5) and is_equal_approx(model.rise_remaining, .5), "Countdown advances only by explicit active decision time")
+	check(not model.advance_clock(11.5) and is_equal_approx(model.rise_remaining, .5), "Countdown advances only by explicit active decision time")
 	check(model.expire_clock().is_empty(), "A row cannot rise before the countdown expires")
 	var before := model.snapshot()
 	model.advance_clock(-1)
@@ -494,9 +715,12 @@ func test_pressure_model() -> void:
 	check(model.expire_clock().is_empty(), "One expiry cannot produce duplicate rises")
 	model.reset(20261022)
 	model.advance_clock(3)
-	model.play(0, CutterManager.placements(model.board, model.tray[0])[0])
-	check(model.rise_remaining == 5 and model.active_seconds == 3, "Cuts and chains never reset the pressure clock")
-	check(SupplySystem.rise_interval(0, 0) == 8 and SupplySystem.rise_interval(84, 160) == 3.5, "Pressure accelerates from eight seconds to a bounded 3.5 seconds")
+	var chosen: Vector2i = CutterManager.placements(model.board, model.tray[0])[0]
+	var time_earned: float = model.forecast(0, chosen).time_bonus
+	model.play(0, chosen)
+	check(model.rise_remaining == 9 + time_earned and model.active_seconds == 3, "Cuts preserve elapsed decision time and only earned chains extend the pending clock")
+	check(SupplySystem.rise_interval(0, 0) == 12 and SupplySystem.rise_interval(70, 140) == 2.75, "Pressure accelerates from twelve seconds to a bounded 2.75 seconds")
+	check(SupplySystem.rise_interval(9, 19) == 12 and SupplySystem.rise_interval(10, 0) == 9.5 and SupplySystem.rise_interval(0, 20) == 9.5, "Pressure progresses each ten punches or twenty active seconds while keeping the initial opening")
 	check(SupplySystem.due_rows(24) == 0 and SupplySystem.due_rows(48) == 0, "Only elapsed time creates pressure at every level")
 	# Waiting must actually lose, without farming automatic free points.
 	for seed_value in 30:
@@ -517,19 +741,38 @@ func test_pressure_model() -> void:
 	model.advance_clock(3.25)
 	var clone := RoundModel.new()
 	check(clone.restore(model.snapshot()), "A partly consumed clock is a valid saved round")
-	model.advance_clock(4.75)
-	clone.advance_clock(4.75)
+	model.advance_clock(8.75)
+	clone.advance_clock(8.75)
 	model.expire_clock()
 	clone.expire_clock()
 	check(model.snapshot() == clone.snapshot(), "Restoring a partial clock preserves the exact timed-row future")
+	var late_round := model.snapshot()
+	late_round.rise_period = 3.25
+	late_round.rise_remaining = 2.0
+	check(RoundModel.valid(late_round) and clone.restore(late_round), "A saved 3.25-second countdown remains a valid resumable round")
+	check(clone.rise_period == 3.25 and clone.rise_remaining == 2.0 and clone.score == late_round.score, "Late-round resume preserves its exact period, remaining time and score")
+	late_round.rise_period = 2.75
+	late_round.rise_remaining = 1.5
+	check(RoundModel.valid(late_round) and clone.restore(late_round) and clone.rise_period == 2.75 and clone.rise_remaining == 1.5, "The final 2.75-second pressure interval remains saveable and resumes exactly")
+	late_round.rise_period = 2.5
+	check(not RoundModel.valid(late_round), "Saved intervals below the difficulty floor are rejected")
+	var previous_version := model.snapshot()
+	previous_version.version = 3
+	previous_version.rise_period = 8.0
+	previous_version.rise_remaining = 2.75
+	check(clone.restore(previous_version) and clone.rise_remaining == 2.75 and clone.rise_period == 8.0, "Existing version-three saves retain their partial eight-second countdown")
+	var period := model.rise_period
+	model.turns = 84
+	model.advance_clock(.25)
+	check(model.rise_period == period, "Difficulty changes never shorten a countdown already underway")
 	var legacy := model.snapshot()
 	legacy.version = 2
 	legacy.turns = 80
 	for key in ["active_seconds", "rise_remaining", "rise_period", "timed_rows", "end_reason"]:
 		legacy.erase(key)
 	check(clone.restore(legacy) and clone.board.snapshot() == legacy.cells and clone.score == legacy.score and str(clone.rng.state) == legacy.rng_state, "Version-two boards, scores and RNG migrate without resetting progress")
-	check(clone.rise_remaining == 8 and clone.rise_period == 8, "Older long runs receive a full first countdown when upgraded")
-	for bad in [-1.0, 9.0, INF, NAN]:
+	check(clone.rise_remaining == 12 and clone.rise_period == 12, "Older long runs receive a full first countdown when upgraded")
+	for bad in [-1.0, 13.0, INF, NAN]:
 		var corrupt := model.snapshot()
 		corrupt.rise_remaining = bad
 		check(not RoundModel.valid(corrupt), "Invalid saved countdowns are rejected")
@@ -548,7 +791,7 @@ func test_live_pressure() -> void:
 	game.sync_model()
 	game.checkpoint()
 	game.pressure_enabled = true
-	for menu in ["pause", "help", "resume"]:
+	for menu in ["home", "pause", "settings", "help", "resume"]:
 		game.overlay = menu
 		var seconds: float = game.model.rise_remaining
 		game.tick_pressure(.25)
@@ -566,7 +809,7 @@ func test_live_pressure() -> void:
 	game.model.rise_remaining = .1
 	game.dragging = true
 	game.touch_id = 0
-	game.hover = Vector2i(0, 6)
+	game.hover = Vector2i(0, 5)
 	game.undo_state = game.model.snapshot()
 	game.tick_pressure(.1)
 	check(game.busy and not game.dragging and game.touch_id == -1, "Expiry cancels held input before the board moves")
@@ -588,7 +831,7 @@ func test_live_pressure() -> void:
 	await game.place_cutter(CutterManager.placements(game.model.board, game.model.tray[game.selected])[0])
 	game.model.advance_clock(2.5)
 	game.undo_move()
-	check(game.model.rise_remaining == 5.5 and game.model.active_seconds == 2.5, "Undo restores the move but never refunds thinking time")
+	check(game.model.rise_remaining == 9.5 and game.model.active_seconds == 2.5, "Undo restores the move but never refunds thinking time")
 	game.model.board.put(Vector2i(0, 0), 2)
 	game.model.rise_remaining = 0
 	await game.rise_from_timer()

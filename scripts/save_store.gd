@@ -8,7 +8,7 @@ var sound := true
 var haptics := false
 var reduced_motion := false
 var high_contrast := false
-var explain_clears := true
+var explain_clears := false
 var round_data: Dictionary = {}
 var undo_data: Dictionary = {}
 
@@ -26,7 +26,7 @@ func load_data() -> void:
 	haptics = config.get_value("settings", "haptics", false) == true
 	reduced_motion = config.get_value("settings", "reduced_motion", false) == true
 	high_contrast = config.get_value("settings", "high_contrast", false) == true
-	explain_clears = config.get_value("settings", "explain_clears", true) == true
+	explain_clears = config.get_value("settings", "explain_clears", false) == true
 	var round_value = config.get_value("round", "checkpoint", {})
 	var undo_value = config.get_value("round", "undo", {})
 	round_data = round_value if round_value is Dictionary and RoundModel.valid(round_value) else {}

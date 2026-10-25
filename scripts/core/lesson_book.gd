@@ -1,43 +1,54 @@
 class_name LessonBook
 extends RefCounted
 
-const TITLES := ["CUT THE SELECTED COLOUR", "FOUR CONNECTED CLEAR", "FALL AGAIN. CHAIN AGAIN."]
-const HINTS := ["Tap orange. The green block stays.", "Cut orange. Blue falls into a connected group of four.", "Cut violet. Orange clears, then falling blue clears."]
-const SUCCESS := ["CUT COMPLETE", "FOUR CONNECTED = CLEAR", "SECOND MATCH = CHAIN ×2"]
-const EXPLANATIONS := ["Green stayed. Only orange was cut.", "Four blue blocks touched sides, so they cleared.", "Orange cleared first. Then blue formed a new match."]
+const GOALS := [Vector2i(2, 8), Vector2i(0, 7), Vector2i(0, 5)]
+
+const TITLES := ["PUNCH A SHAPE", "MAKE COLOURS MEET", "ONE FALL. ANOTHER MATCH."]
+const HINTS := ["Punch the three blocks. Every colour inside your shape goes.", "Punch the middle pair. Falling orange makes four connected.", "Punch the top corner. Watch two matches happen in sequence."]
+const SUCCESS := ["PERFECT PUNCH", "FOUR CONNECTED = MATCH", "SECOND MATCH = CHAIN ×2"]
+const EXPLANATIONS := ["Shapes punch every colour. A full shape earns a bonus.", "Four orange blocks touched sides after falling, so they matched.", "The first match opened space for a second. Chains earn breathing time."]
 
 static func build(board: BoardManager, lesson: int) -> Dictionary:
 	board.clear()
 	if lesson == 0:
-		board.put(Vector2i(2, 8), 0)
-		board.put(Vector2i(3, 8), 0)
-		board.put(Vector2i(4, 8), 2)
-		return {"shape": 1, "color": 0}
+		for x in range(2, 5):
+			board.put(Vector2i(x, 8), x - 2)
+		return {"shape": 1, "color": -1}
 	if lesson == 1:
-		for y in [7, 8]:
-			board.put(Vector2i(2, y), 0)
-			board.put(Vector2i(3, y), 1)
-		for y in [5, 6]:
-			board.put(Vector2i(2, y), 1)
-		return {"shape": 0, "color": 0}
+		board.put(Vector2i(0, 6), 1)
+		board.put(Vector2i(0, 7), 1)
+		board.put(Vector2i(0, 8), 0)
+		for y in [5, 6, 8]:
+			board.put(Vector2i(1, y), 0)
+		board.put(Vector2i(1, 7), 1)
+		return {"shape": 1, "color": -1}
 	chain_pocket(board)
-	return {"shape": 1, "color": 3}
+	return {"shape": 0, "color": -1}
 
 static func chain_pocket(board: BoardManager) -> void:
-	# A stable arrangement: removing gold makes four pink, then four purple.
-	for y in [4, 5, 7, 8]:
-		board.put(Vector2i(0, y), 0)
-	for y in [2, 3]:
-		board.put(Vector2i(0, y), 1)
-	for y in [7, 8]:
-		board.put(Vector2i(1, y), 1)
-	board.put(Vector2i(0, 6), 3)
-	board.put(Vector2i(1, 6), 3)
+	# A settled five-row puzzle: corner at (0, 5) produces two automatic waves.
+	var rows := [[-1, 1, 0], [0, 2, 0], [0, 0, 2], [2, 2, 0], [2, 1, 0]]
+	for y in rows.size():
+		for x in 3:
+			board.put(Vector2i(x, y + 4), rows[y][x])
+
+# Returns as soon as a discoverable chain exists; it never changes the board.
+static func has_cascade(board: BoardManager, minimum_waves: int = 1) -> bool:
+	for shape in CutterManager.SHAPES.size():
+		var cutter := {"shape": shape, "color": -1}
+		for origin in CutterManager.placements(board, cutter):
+			var trial := BoardManager.new()
+			trial.cells = board.snapshot()
+			trial.remove(CutterManager.hits(trial, cutter, origin))
+			if ComboManager.resolve(trial).waves.size() >= minimum_waves:
+				return true
+	return false
 
 static func endless_opening(board: BoardManager, rng: RandomNumberGenerator) -> void:
-	# Fresh terrain every round, with four rows of ceiling headroom. The authored
-	# two-wave pocket belongs to training, so repeat play rewards reading the board.
-	for attempt in 32:
+	# Rejection-sample fresh settled terrain, keeping a real match opportunity.
+	# Some openings seek two waves, but every accepted board has at least one.
+	var desired_waves := 2 if rng.randf() < .25 else 1
+	for attempt in 16:
 		board.clear()
 		for x in BoardManager.WIDTH:
 			var depth := rng.randi_range(3, 5)
@@ -48,7 +59,22 @@ static func endless_opening(board: BoardManager, rng: RandomNumberGenerator) -> 
 					if MatchSystem.groups(board).is_empty():
 						break
 					color = (color + 1) % 4
-		if MatchSystem.groups(board).is_empty() and CutterManager.candidates(board).size() >= 3:
+		if MatchSystem.groups(board).is_empty() and has_cascade(board, desired_waves if attempt < 8 else 1):
 			return
-	# Bounded fallback for pathological seeds; still settled and playable.
-	SpawnManager.seed_board(board, rng)
+	# Bounded fallback moves and recolours a known settled puzzle. Remaining
+	# columns vary independently behind an empty separator, preserving the chain.
+	board.clear()
+	var pocket := BoardManager.new()
+	chain_pocket(pocket)
+	var left := rng.randi_range(0, 4)
+	var shift := rng.randi_range(0, 3)
+	for y in BoardManager.HEIGHT:
+		for x in 3:
+			var color := pocket.at(Vector2i(x, y))
+			if color >= 0:
+				board.put(Vector2i(left + x, y), (color + shift) % 4)
+	for x in BoardManager.WIDTH:
+		if x >= left - 1 and x <= left + 3:
+			continue
+		for y in range(9 - rng.randi_range(2, 4), 9):
+			board.put(Vector2i(x, y), (x + y + shift) % 4)

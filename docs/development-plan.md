@@ -2,7 +2,11 @@
 
 **Goal:** Develop a satisfying, replayable mobile puzzle game with potential for advertising revenue.
 
-**Platform:** Android first, followed by iOS if the game shows promise.
+**Current direction (23 October 2026):** v0.7.1 keeps the approved v0.7 interface and controls while increasing pressure and reducing time rewards; the owner found the previous balance too easy. The owner will use an iPhone 15 Pro for personal testing; iOS packaging is deferred.
+
+**Platform:** Portrait mobile. An Android export preset exists; physical-device QA remains.
+
+The schedule below is the original planning baseline, not a current completion report. See [the agent handoff](AGENT_HANDOFF.md) and [v0.7.1 build notes](v7-1-build-notes.md) for the implemented state.
 
 **Technology:** Godot 4, GDScript, 2D graphics.
 
@@ -10,37 +14,37 @@
 
 The game consists of a 7 × 9 grid filled partially with four colours of jelly blocks.
 
-The player has three randomly generated cutters available at a time. Each cutter has a colour and shape: an L, a straight line, or a 2 × 2 square.
+The player receives a hand of three shape punches: a corner, a straight line and a 2 × 2 square. Each removes every occupied block beneath it. Used shapes remain spent until the next hand.
 
 **Gameplay loop:**
-1. Player selects a coloured cutter and positions it over the grid.
-2. The cutter removes only blocks matching its colour. A valid move must remove at least two blocks.
+1. Player selects a shape punch and positions it over the grid.
+2. The punch removes every occupied block in its footprint, regardless of colour. A valid move must remove at least two blocks.
 3. Blocks above the cleared spaces fall downward.
 4. Connected groups of four or more matching blocks automatically explode.
 5. Further falling blocks can produce chain reactions, increasing the combo multiplier.
-6. Every three cutter moves, a new row of blocks falls into the board.
-7. The game ends when a new row cannot fit or no valid move remains.
+6. A visible decision clock starts at 12 seconds and adds a bottom row at expiry; cuts never reset it. Pressure gradually accelerates. Recovery rows are added only when no legal cutter remains.
+7. The game ends if a rise would push an existing top-row block out of the board.
 
 **Objective:** Survive as long as possible and achieve the highest score.
 
-The key design difference to investigate is colour-selective cutting combined with gravity, rather than simply deleting every tile under a stamp.
+The central planning decision is which shape to spend next and how its removal makes colours meet after gravity. Successful automatic matches also earn capped breathing time.
 
 ## 2. Minimum viable product (MVP)
 
 The first version must contain:
 
-- [ ] 7 × 9 puzzle grid
-- [ ] Four types of coloured jelly blocks
-- [ ] Three cutter shapes
-- [ ] Touch and drag controls
-- [ ] Valid-move highlighting
-- [ ] Block removal and gravity
-- [ ] Automatic matching and chain reactions
-- [ ] Score and combo multiplier
-- [ ] Incoming rows and game-over rules
-- [ ] Restart and best-score saving
-- [ ] Basic animations and sound effects
-- [ ] Short interactive tutorial
+- [x] 7 × 9 puzzle grid
+- [x] Four types of coloured jelly blocks
+- [x] Three cutter shapes
+- [x] Touch and drag controls
+- [x] Valid-move highlighting
+- [x] Block removal and gravity
+- [x] Automatic matching and chain reactions
+- [x] Score and combo multiplier
+- [x] Incoming rows and game-over rules
+- [x] Restart and best-score saving
+- [x] Basic animations and sound effects
+- [x] Short interactive tutorial
 
 **Do not build yet:** accounts, multiplayer, 500 levels, skins, in-app purchases, advertisements or cloud saves.
 
