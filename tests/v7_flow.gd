@@ -125,7 +125,7 @@ func run() -> void:
 		game.select_cutter(slot_found)
 		var before: Dictionary = game.model.snapshot()
 		await game.place_cutter(origin_found)
-		check(is_equal_approx(game.model.rise_remaining, 3.0 + forecast.time_bonus), "A live cut grants the predicted breathing time")
+		check(is_equal_approx(game.model.rise_remaining, 3.0 + forecast.time_bonus - forecast.effort), "A live cut grants the predicted breathing time")
 		game.model.advance_clock(.5)
 		game.checkpoint()
 		var reloaded := SaveStore.new(temp_path)
@@ -139,12 +139,12 @@ func run() -> void:
 		check(resumed.overlay == "home" and resumed.has_saved_round(), "Reloaded chain checkpoint waits on the Continue menu")
 		resumed.undo_move()
 		check(resumed.model.board.snapshot() == before.cells, "Reloaded undo restores the pre-chain board")
-		check(is_equal_approx(resumed.model.rise_remaining, 2.5), "Reloaded undo strips time credit and retains thinking time")
+		check(is_equal_approx(resumed.model.rise_remaining, 2.5 - forecast.effort), "Reloaded undo strips time credit and retains thinking time")
 		resumed.queue_free()
 		await process_frame
 		game.undo_move()
 		check(game.model.board.snapshot() == before.cells and game.model.score == before.score, "Undo restores the chain's original board and score")
-		check(is_equal_approx(game.model.rise_remaining, 2.5), "Undo removes earned breathing time without refunding thinking")
+		check(is_equal_approx(game.model.rise_remaining, 2.5 - forecast.effort), "Undo removes earned breathing time without refunding thinking")
 		check(is_equal_approx(game.model.active_seconds, .5), "Undo preserves active decision time")
 		break
 	check(found_chain, "Seeded openings contain a rewarding chain opportunity")

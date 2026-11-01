@@ -1,7 +1,7 @@
 class_name RoundModel
 extends RefCounted
 
-const VERSION := 4
+const VERSION := 5
 var board := BoardManager.new()
 var rng := RandomNumberGenerator.new()
 var tray: Array = []
@@ -19,6 +19,10 @@ var cleared := 0
 var active_seconds := 0.0
 var rise_remaining := SupplySystem.INITIAL_INTERVAL
 var rise_period := SupplySystem.INITIAL_INTERVAL
+# Gross effort never rewinds with undo. The small pending balance carries a
+# punch's overshoot into the next clock instead of granting free effort.
+var effort_seconds := 0.0
+var pending_effort := 0.0
 var timed_rows := 0
 var end_reason := ""
 
@@ -40,6 +44,8 @@ func reset(seed_value: int = -1, lesson_index: int = -1) -> void:
 	active_seconds = 0
 	rise_remaining = SupplySystem.INITIAL_INTERVAL
 	rise_period = SupplySystem.INITIAL_INTERVAL
+	effort_seconds = 0.0
+	pending_effort = 0.0
 	timed_rows = 0
 	end_reason = ""
 	if lesson >= 0:
@@ -50,10 +56,10 @@ func reset(seed_value: int = -1, lesson_index: int = -1) -> void:
 	incoming = SpawnManager.pressure_row(board, rng)
 
 func snapshot() -> Dictionary:
-	return {"version": VERSION, "cells": board.snapshot(), "tray": tray.duplicate(true), "incoming": incoming.duplicate(), "score": score, "turns": turns, "combo": combo, "best_combo": best_combo, "selected": selected, "lesson": lesson, "lesson_complete": lesson_complete, "over": over, "fresh_batches": fresh_batches, "cleared": cleared, "active_seconds": active_seconds, "rise_remaining": rise_remaining, "rise_period": rise_period, "timed_rows": timed_rows, "end_reason": end_reason, "rng_seed": str(rng.seed), "rng_state": str(rng.state)}
+	return {"version": VERSION, "cells": board.snapshot(), "tray": tray.duplicate(true), "incoming": incoming.duplicate(), "score": score, "turns": turns, "combo": combo, "best_combo": best_combo, "selected": selected, "lesson": lesson, "lesson_complete": lesson_complete, "over": over, "fresh_batches": fresh_batches, "cleared": cleared, "active_seconds": active_seconds, "rise_remaining": rise_remaining, "rise_period": rise_period, "effort_seconds": effort_seconds, "pending_effort": pending_effort, "timed_rows": timed_rows, "end_reason": end_reason, "rng_seed": str(rng.seed), "rng_state": str(rng.state)}
 
 static func valid(data: Dictionary) -> bool:
-	if data.get("version") not in [2, 3, VERSION] or not data.get("cells") is Array or data.cells.size() != 9:
+	if data.get("version") not in [2, 3, 4, VERSION] or not data.get("cells") is Array or data.cells.size() != 9:
 		return false
 	for row in data.cells:
 		if not row is Array or row.size() != 7:
@@ -92,6 +98,12 @@ static func valid(data: Dictionary) -> bool:
 			return false
 		if not data.get("timed_rows") is int or data.timed_rows < 0 or data.get("end_reason") not in ["", "timer", "scheduled", "refill"]:
 			return false
+	if data.version >= 5:
+		for key in ["effort_seconds", "pending_effort"]:
+			if not (data.get(key) is float or data.get(key) is int) or not is_finite(float(data[key])) or data[key] < 0:
+				return false
+		if data.pending_effort > SupplySystem.INITIAL_INTERVAL * SupplySystem.MAX_EFFORT_RATIO or (data.pending_effort > 0 and data.rise_remaining > 0):
+			return false
 	# Round checkpoints must be settled, including authored lesson layouts.
 	var trial := BoardManager.new()
 	trial.cells = data.cells.duplicate(true)
@@ -117,7 +129,7 @@ func restore(data: Dictionary) -> bool:
 		return false
 	board.cells = data.cells.duplicate(true)
 	tray = data.tray.duplicate(true)
-	if data.version < VERSION:
+	if data.version < 4:
 		for cutter in tray:
 			if not cutter.is_empty():
 				cutter.color = -1
@@ -135,9 +147,11 @@ func restore(data: Dictionary) -> bool:
 	active_seconds = float(data.active_seconds) if data.version >= 3 else 0.0
 	rise_remaining = float(data.rise_remaining) if data.version >= 3 else SupplySystem.INITIAL_INTERVAL
 	rise_period = float(data.rise_period) if data.version >= 3 else SupplySystem.INITIAL_INTERVAL
+	effort_seconds = float(data.effort_seconds) if data.version >= 5 else 0.0
+	pending_effort = float(data.pending_effort) if data.version >= 5 else 0.0
 	timed_rows = data.timed_rows if data.version >= 3 else 0
 	end_reason = data.end_reason if data.version >= 3 else ""
-	if data.version < VERSION and lesson >= 0:
+	if data.version < 4 and lesson >= 0:
 		# Old lessons depended on colour-selective punches. Restart only that
 		# lesson with its matching new layout; endless progress is untouched.
 		tray = [LessonBook.build(board, lesson), {}, {}]
@@ -159,6 +173,42 @@ func restore(data: Dictionary) -> bool:
 	rng.state = int(data.rng_state)
 	return true
 
+func punch_effort() -> float:
+	return SupplySystem.punch_effort(turns, active_seconds, rise_period) if lesson < 0 else 0.0
+
+# One shared receipt keeps previews and actual settlement identical. Rewards
+# offset effort before expiry, including a chain played at the last moment.
+func clock_forecast(waves: int) -> Dictionary:
+	var effort := punch_effort()
+	var reward := SupplySystem.chain_time(waves) if lesson < 0 else 0.0
+	reward = minf(reward, maxf(0, rise_period - rise_remaining + pending_effort + effort))
+	var balance := rise_remaining - pending_effort + reward - effort
+	var owed_rows := 0
+	# Predict the same expiries the controller will present after the cut.
+	var next_period := SupplySystem.rise_interval(turns + 1, active_seconds)
+	while lesson < 0 and balance <= 0:
+		owed_rows += 1
+		balance += next_period
+	return {"effort": effort, "time_bonus": reward, "clock_delta": reward - effort, "rows_due": owed_rows}
+
+func set_clock_balance(balance: float) -> void:
+	rise_remaining = maxf(0, balance)
+	pending_effort = maxf(0, -balance)
+
+# Restore the decision, but never refund either thinking time or punch effort.
+# Timed rises invalidate undo in the controller, so no row can be rewound.
+func restore_undo(data: Dictionary) -> bool:
+	var seconds := active_seconds
+	var effort := effort_seconds
+	if not restore(data):
+		return false
+	var elapsed := maxf(0, seconds - active_seconds)
+	var spent := maxf(0, effort - effort_seconds)
+	set_clock_balance(rise_remaining - pending_effort - elapsed - spent)
+	active_seconds = maxf(seconds, active_seconds)
+	effort_seconds = maxf(effort, effort_seconds)
+	return true
+
 func forecast(slot: int, origin: Vector2i, include_board: bool = false) -> Dictionary:
 	if lesson >= 0 and origin != LessonBook.GOALS[lesson]:
 		return {}
@@ -175,9 +225,8 @@ func forecast(slot: int, origin: Vector2i, include_board: bool = false) -> Dicti
 	var matched := 0
 	for wave in result.waves:
 		matched += wave.cells.size()
-	var time_bonus := SupplySystem.chain_time(result.waves.size()) if lesson < 0 else 0.0
-	time_bonus = minf(time_bonus, maxf(0, rise_period - rise_remaining))
-	var prediction := {"hits": hits, "waves": result.waves.size(), "matched": matched, "score": ComboManager.cut_score(hits.size()) + bonus + result.score, "perfect": bonus > 0, "bonus": bonus, "time_bonus": time_bonus}
+	var prediction := {"hits": hits, "waves": result.waves.size(), "matched": matched, "score": ComboManager.cut_score(hits.size()) + bonus + result.score, "perfect": bonus > 0, "bonus": bonus}
+	prediction.merge(clock_forecast(result.waves.size()))
 	if include_board:
 		prediction.cells = trial.snapshot()
 	return prediction
@@ -196,10 +245,12 @@ func play(slot: int, origin: Vector2i) -> Array:
 	remove_event(events, hits, 0, [], "player", bonus)
 	resolve_events(events)
 	if lesson < 0:
-		var earned_time := minf(SupplySystem.chain_time(combo), maxf(0, rise_period - rise_remaining))
-		if earned_time > 0:
-			rise_remaining += earned_time
-			events.append({"type": "breathing", "seconds": earned_time})
+		var receipt := clock_forecast(combo)
+		effort_seconds += receipt.effort
+		set_clock_balance(rise_remaining - pending_effort + receipt.clock_delta)
+		events.append({"type": "effort", "seconds": receipt.effort, "pending": pending_effort})
+		if receipt.time_bonus > 0:
+			events.append({"type": "breathing", "seconds": receipt.time_bonus})
 	turns += 1
 	if lesson >= 0:
 		lesson_complete = true
@@ -225,7 +276,7 @@ func expire_clock() -> Array:
 	var events: Array = []
 	timed_rows += 1
 	rise_period = SupplySystem.rise_interval(turns, active_seconds)
-	rise_remaining = rise_period
+	set_clock_balance(rise_period - pending_effort)
 	combo = 0
 	if drop(events, "timer"):
 		replenish(events)

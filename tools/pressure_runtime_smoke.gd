@@ -13,7 +13,7 @@ func verify(condition: bool, description: String) -> void:
 		printerr("FAIL: " + description)
 
 func run() -> void:
-	var save_path := "/private/tmp/punch_pop_v7_1_real_clock_%d.cfg" % Time.get_ticks_usec()
+	var save_path := "/private/tmp/punch_pop_v8_real_clock_%d.cfg" % Time.get_ticks_usec()
 	var began := Time.get_ticks_msec()
 	var expected := RoundModel.new()
 	expected.reset(20261022)
@@ -69,8 +69,8 @@ func run() -> void:
 	var disk := SaveStore.new(save_path)
 	disk.load_data()
 	verify(disk.round_data.is_empty(), "Completed timer death clears the resumable round")
-	var report := {"date": "2026-10-23", "scope": "Headless real frame clock; no desktop window or renderer measurement", "checks": checks, "failures": failures, "wall_seconds": (Time.get_ticks_msec() - began) / 1000.0, "active_seconds": resumed.model.active_seconds, "timed_expiries": resumed.model.timed_rows, "score": resumed.score, "turns": resumed.turns, "end_reason": resumed.model.end_reason}
-	var file := FileAccess.open("res://docs/v7-1-runtime-smoke.json", FileAccess.WRITE)
+	var report := {"date": "2026-10-26", "scope": "Headless real frame clock; no desktop window or renderer measurement", "checks": checks, "failures": failures, "wall_seconds": (Time.get_ticks_msec() - began) / 1000.0, "active_seconds": resumed.model.active_seconds, "timed_expiries": resumed.model.timed_rows, "score": resumed.score, "turns": resumed.turns, "end_reason": resumed.model.end_reason}
+	var file := FileAccess.open("res://docs/v8-runtime-smoke.json", FileAccess.WRITE)
 	file.store_string(JSON.stringify(report, "\t"))
 	print(JSON.stringify(report))
 	resumed.queue_free()

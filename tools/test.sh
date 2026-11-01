@@ -39,12 +39,15 @@ elif [[ "${1:-}" == "--flow" ]]; then
   TEST_SUCCESS='Punch Pop flow: [0-9]+ checks, 0 failures'
 elif [[ "${1:-}" == "--audit" ]]; then
   TEST_SCRIPT=res://tools/pressure_audit.gd
-  TEST_SUCCESS='Saved docs/v7-1-pressure-audit.json'
+  TEST_SUCCESS='Saved docs/[^/]+\.json'
 elif [[ -n "${1:-}" ]]; then
   echo 'Usage: tools/test.sh [--real-clock|--flow|--audit]' >&2
   exit 2
 fi
-"$TEST_LAUNCHER" --headless --script "$TEST_SCRIPT" --log-file "$TEST_LOG"
+if [[ $# -gt 0 ]]; then
+  shift
+fi
+"$TEST_LAUNCHER" --headless --script "$TEST_SCRIPT" --log-file "$TEST_LOG" -- "$@"
 # Godot can exit 0 after a GDScript runtime error; do not accept that as a pass.
 if grep -Eq '^(SCRIPT ERROR|ERROR):' "$TEST_LOG"; then
   echo 'Godot reported an error; the test run is not clean.' >&2

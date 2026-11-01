@@ -140,9 +140,13 @@ func draw_instruction() -> void:
 			if prediction.get("matched", 0) > 0:
 				outcome += "   ·   Match %d" % prediction.matched
 			outcome += "   ·   +%d" % prediction.score
-		if prediction.get("time_bonus", 0.0) > 0:
-			outcome += "   ·   +%.1fs" % prediction.time_bonus
-		tint = ACCENT
+		if prediction.get("effort", 0.0) > 0:
+			var clock_delta: float = prediction.clock_delta
+			outcome += "   ·   clock %s%.1fs" % ["−" if clock_delta < 0 else "+", absf(clock_delta)]
+		var rows_due: int = prediction.get("rows_due", 0)
+		if rows_due > 0:
+			outcome += "   ·   ROW" if rows_due == 1 else "   ·   ROWS ×%d" % rows_due
+		tint = Color("ffbd65") if rows_due > 0 else ACCENT
 	elif game.busy:
 		if game.phase == "match":
 			outcome = "Pop!"
@@ -151,7 +155,7 @@ func draw_instruction() -> void:
 	elif game.notice_time > 0:
 		outcome = game.notice
 	else:
-		outcome = "Drag a shape onto the board"
+		outcome = "Drag a shape. Each punch spends time."
 	var outcome_width: float = font.get_string_size(outcome, HORIZONTAL_ALIGNMENT_LEFT, -1, 15).x
 	var outcome_size := 15 if outcome_width <= 420 else maxi(10, int(15 * 420 / outcome_width))
 	label(outcome, Vector2(270, 207), outcome_size, tint, 1)
@@ -321,7 +325,9 @@ func draw_footer() -> void:
 	box(Rect2(60, 1014, 132, 44), PANEL, 9, EDGE, 1)
 	head("SKIP LESSONS" if lessons else "UNDO", Vector2(126, 1042), 17, INK if can_undo or lessons else MUTED, 1)
 	if lessons:
-		label("No clock. Take your time.", Vector2(480, 1040), 11, MUTED, 2)
+		label("No clock here. Arcade punches spend time.", Vector2(480, 1040), 11, MUTED, 2)
+	else:
+		label("Punch −%.1fs · chains buy time" % game.model.punch_effort(), Vector2(480, 1040), 11, MUTED, 2)
 
 func button(rect: Rect2, value: String, primary: bool = false) -> void:
 	box(Rect2(rect.position + Vector2(0, 4), rect.size), Color("215069") if primary else Color("0b1427"), 10)
@@ -395,7 +401,7 @@ func draw_home() -> void:
 	draw_circle(Vector2(435, 382), 4, ACCENT, true, -1, true)
 	draw_line(Vector2(415, 321), Vector2(415, 337), block_color(3), 3, true)
 	draw_line(Vector2(407, 329), Vector2(423, 329), block_color(3), 3, true)
-	label("Punch. Match. Make room.", Vector2(270, 494), 14, MUTED, 1)
+	label("Punches spend time. Chains buy some back.", Vector2(270, 494), 14, MUTED, 1)
 	if game.save.best > 0:
 		box(Rect2(167, 515, 206, 32), Color("2a2943"), 16)
 		head("PERSONAL BEST  %s" % str(game.save.best), Vector2(270, 538), 17, Color("ffce80"), 1)
@@ -444,6 +450,6 @@ func draw_help() -> void:
 	label("touching sides, in any shape", Vector2(180, 578), 12, MUTED)
 	label("Diagonals and full rows have no special rule.", Vector2(112, 602), 10, MUTED)
 	label("Use your shapes to get a fresh set.", Vector2(95, 630), 12, INK)
-	label("Rows rise. Keep blocks below the ceiling.", Vector2(95, 654), 13, MUTED)
-	label("Chains buy back a little time.", Vector2(95, 678), 13, MUTED)
+	label("Punch cost grows. Zero time brings new rows.", Vector2(95, 654), 12, MUTED)
+	label("Chains buy some back. Keep below the ceiling.", Vector2(95, 678), 12, MUTED)
 	button(game.replay_rect, "GOT IT", true)

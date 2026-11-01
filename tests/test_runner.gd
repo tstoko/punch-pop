@@ -26,8 +26,11 @@ func run() -> void:
 	test_clear_explanations()
 	test_save_validation()
 	test_pressure_model()
+	test_punch_effort()
 	await test_home_and_drag()
 	await test_game_flow()
+	await test_preview_clock_cache()
+	await test_live_effort_debt()
 	await test_live_pressure()
 	check(game_flow_completed, "Controller suite reached cleanup without a script error")
 	print("Punch Pop: %d checks, %d failures" % [checks, failures])
@@ -165,21 +168,21 @@ func test_shape_punches_and_breathing() -> void:
 	check(prediction.waves == 2 and prediction.matched >= 8 and prediction.time_bonus == .5, "A two-wave punch forecasts half a second of breathing time")
 	var events := model.play(0, Vector2i(0, 5))
 	var receipt := TurnSummary.from_events(events)
-	check(receipt.time_bonus == prediction.time_bonus and model.rise_remaining == 8.5, "Only actual cut-created multiwave chains award the forecast breathing time")
+	check(receipt.time_bonus == prediction.time_bonus and is_equal_approx(model.rise_remaining, 8.5 - prediction.effort), "Cut-created chain credit and effort match the forecast")
 	model.reset(700, 2)
 	model.lesson = -1
 	model.advance_clock(.25)
 	prediction = model.forecast(0, Vector2i(0, 5))
-	check(prediction.time_bonus == .25, "Breathing forecasts are capped by the current period")
+	check(prediction.time_bonus == .5, "A chain can offset effort charged by the same cut")
 	events = model.play(0, Vector2i(0, 5))
-	check(TurnSummary.from_events(events).time_bonus == .25 and model.rise_remaining == model.rise_period, "Fast chains cannot bank time beyond one countdown")
+	check(TurnSummary.from_events(events).time_bonus == .5 and is_equal_approx(model.rise_remaining, model.rise_period - .25 + prediction.clock_delta), "Fast chains apply effort without banking time beyond one countdown")
 	model.reset(700, 1)
 	model.lesson = -1
 	model.advance_clock(4.0)
 	prediction = model.forecast(0, LessonBook.GOALS[1])
 	check(prediction.waves == 1 and prediction.time_bonus == 0.0, "An ordinary one-wave match buys board space without granting extra thinking time")
 	events = model.play(0, LessonBook.GOALS[1])
-	check(TurnSummary.from_events(events).time_bonus == 0.0 and model.rise_remaining == 8.0, "Ordinary match execution agrees with its zero-time forecast")
+	check(TurnSummary.from_events(events).time_bonus == 0.0 and is_equal_approx(model.rise_remaining, 8.0 - prediction.effort), "Ordinary matches pay effort and grant no chain credit")
 	model.reset(701)
 	var legacy := model.snapshot()
 	legacy.version = 3
@@ -426,26 +429,31 @@ func test_game_flow() -> void:
 	var after: Dictionary = game.model.snapshot()
 	check(game.model.board.occupied() > 0 and not game.targets.is_empty(), "Sparse opening earns a fresh playable batch")
 	game.undo_move()
-	check(game.model.snapshot() == before, "Undo restores the exact board, score, tray, turn and RNG state")
+	check(without_clock(game.model.snapshot()) == without_clock(before), "Undo restores the exact board, score, tray, turn and RNG state")
+	check(is_equal_approx(game.model.rise_remaining, before.rise_remaining - prediction.effort), "Undo retains the first punch effort and removes its chain credit")
 	check(game.undo_state.is_empty(), "Undo cannot rewind an unlimited history")
 	game.precise = true
 	game.hover = Vector2i(0, 5)
 	check(game.preview_origin() == Vector2i(0, 5) and not game.preview().is_empty(), "Aim mode exposes exact legal stamp origins")
 	await game.place_cutter(Vector2i(0, 5))
-	check(game.model.snapshot() == after, "Replaying after undo produces identical future cutters and rows")
+	check(without_clock(game.model.snapshot()) == without_clock(after), "Replaying after undo produces identical future cutters and rows")
+	check(game.model.effort_seconds > after.effort_seconds, "Replaying after undo pays the punch effort again")
+	after = game.model.snapshot()
 	var loaded := SaveStore.new("/private/tmp/punch_pop_v5_test_punch_pop_v2.cfg")
 	loaded.load_data()
-	check(loaded.round_data == after and not loaded.undo_data.is_empty(), "Settled round and undo are written to disk")
+
+	check(same_checkpoint(loaded.round_data, after) and not loaded.undo_data.is_empty(), "Settled round and undo are written to disk")
 	var resumed = load("res://scenes/main.tscn").instantiate()
 	resumed.save = loaded
 	resumed.pressure_enabled = false
 	root.add_child(resumed)
 	await process_frame
-	check(resumed.overlay == "home" and resumed.model.snapshot() == after, "A new game instance restores the exact checkpoint")
+	check(resumed.overlay == "home" and same_checkpoint(resumed.model.snapshot(), after), "A new game instance restores the exact checkpoint")
 	resumed.overlay_press(Vector2(270, 602))
 	check(resumed.overlay.is_empty(), "Continue returns to the saved board")
 	resumed.undo_move()
-	check(resumed.model.snapshot() == before, "Undo also survives quitting and resuming")
+	check(without_clock(resumed.model.snapshot()) == without_clock(before), "Undo also survives quitting and resuming")
+	check(resumed.model.effort_seconds == after.effort_seconds, "Reloaded undo retains cumulative punch effort")
 	# Invalid taps and canceled gestures cost nothing.
 	var unchanged: Dictionary = resumed.model.snapshot()
 	resumed.press(resumed.cell_center(Vector2i(6, 0)))
@@ -539,10 +547,11 @@ func test_round_model() -> void:
 	model.tray = [{"shape": 1, "color": 0}, {}, {}]
 	model.turns = 47
 	var previewed := model.incoming.duplicate()
+	var sparse_effort := model.punch_effort()
 	events = model.play(0, Vector2i(0, 8))
 	check(model.board.occupied() == 2 and model.turns == 48, "A good cut preserves breathing room even at late pressure levels")
 	check(not events.any(func(e: Dictionary) -> bool: return e.type in ["row", "fresh"]), "A sparse playable board receives no surprise refill")
-	check(model.incoming == previewed and model.rise_remaining == 12, "Cuts preserve the preview and pending countdown")
+	check(model.incoming == previewed and is_equal_approx(model.rise_remaining, 12 - sparse_effort), "Cuts preserve the preview and pending countdown")
 	check(RoundModel.valid(model.snapshot()), "Sparse boards retain a playable saved tray")
 	# Overflow is still real and atomic.
 	model.reset(55)
@@ -568,6 +577,8 @@ func test_round_model() -> void:
 		for x in 7:
 			check(SupplySystem.height(model.board, x) <= 5, "Fresh openings leave at least four rows of headroom")
 		for turn in 70:
+			while model.rise_remaining <= 0 and not model.over:
+				model.expire_clock()
 			if model.over:
 				break
 			var slot: int = model.selected
@@ -716,11 +727,12 @@ func test_pressure_model() -> void:
 	model.reset(20261022)
 	model.advance_clock(3)
 	var chosen: Vector2i = CutterManager.placements(model.board, model.tray[0])[0]
-	var time_earned: float = model.forecast(0, chosen).time_bonus
+	var clock_prediction := model.forecast(0, chosen)
+	var time_earned: float = clock_prediction.time_bonus
 	model.play(0, chosen)
-	check(model.rise_remaining == 9 + time_earned and model.active_seconds == 3, "Cuts preserve elapsed decision time and only earned chains extend the pending clock")
-	check(SupplySystem.rise_interval(0, 0) == 12 and SupplySystem.rise_interval(70, 140) == 2.75, "Pressure accelerates from twelve seconds to a bounded 2.75 seconds")
-	check(SupplySystem.rise_interval(9, 19) == 12 and SupplySystem.rise_interval(10, 0) == 9.5 and SupplySystem.rise_interval(0, 20) == 9.5, "Pressure progresses each ten punches or twenty active seconds while keeping the initial opening")
+	check(is_equal_approx(model.rise_remaining, 9 + time_earned - clock_prediction.effort) and model.active_seconds == 3, "Cuts preserve elapsed decision time and only earned chains extend the pending clock")
+	check(SupplySystem.rise_interval(0, 0) == 12 and SupplySystem.rise_interval(70, 175) == 4.0, "Pressure accelerates from twelve seconds to four seconds while punch effort continues rising")
+	check(SupplySystem.rise_interval(7, 24) == 12 and SupplySystem.rise_interval(8, 0) == 10 and SupplySystem.rise_interval(0, 25) == 10, "Pressure progresses each eight punches or twenty-five active seconds while keeping the initial opening")
 	check(SupplySystem.due_rows(24) == 0 and SupplySystem.due_rows(48) == 0, "Only elapsed time creates pressure at every level")
 	# Waiting must actually lose, without farming automatic free points.
 	for seed_value in 30:
@@ -831,7 +843,7 @@ func test_live_pressure() -> void:
 	await game.place_cutter(CutterManager.placements(game.model.board, game.model.tray[game.selected])[0])
 	game.model.advance_clock(2.5)
 	game.undo_move()
-	check(game.model.rise_remaining == 9.5 and game.model.active_seconds == 2.5, "Undo restores the move but never refunds thinking time")
+	check(is_equal_approx(game.model.rise_remaining, 9.5 - game.model.effort_seconds) and game.model.active_seconds == 2.5, "Undo restores the move but never refunds thinking time")
 	game.model.board.put(Vector2i(0, 0), 2)
 	game.model.rise_remaining = 0
 	await game.rise_from_timer()
@@ -840,3 +852,171 @@ func test_live_pressure() -> void:
 	game.queue_free()
 	await process_frame
 	DirAccess.remove_absolute("/private/tmp/punch_pop_v5_test_punch_pop_pressure.cfg")
+
+func test_preview_clock_cache() -> void:
+	var path := "/private/tmp/punch_pop_preview_clock_cache.cfg"
+	DirAccess.remove_absolute(path)
+	var game = load("res://scenes/main.tscn").instantiate()
+	game.save = SaveStore.new(path)
+	game.pressure_enabled = false
+	root.add_child(game)
+	await process_frame
+	game.model.reset(700, 2)
+	game.model.lesson = -1
+	game.model.rise_period = 2.75
+	game.model.rise_remaining = 2.75
+	game.sync_model()
+	game.select_cutter(0)
+	game.precise = true
+	game.hover = Vector2i(0, 5)
+	var before: Dictionary = game.model.snapshot()
+	check(is_equal_approx(game.preview().time_bonus, .275), "A full countdown previews only chain credit that offsets effort")
+	game.model.advance_clock(.1)
+	check(is_equal_approx(game.preview().time_bonus, .375), "A stationary preview updates chain time as the clock changes")
+	game.model.advance_clock(.75)
+	check(game.preview().time_bonus == .5, "A stationary preview caps its clock reward at the chain value")
+	check(game.forecast_cache.size() == 1, "Clock-only preview updates reuse the existing board simulation")
+	var after: Dictionary = game.model.snapshot()
+	before.active_seconds = after.active_seconds
+	before.rise_remaining = after.rise_remaining
+	check(before == after, "Repeated previews change no board, score, random future or hand")
+	game.model.turns = 200
+	game.model.rise_period = 4.0
+	game.model.rise_remaining = 4.0
+	check(game.preview().effort == game.model.punch_effort(), "A stationary preview reflects escalated punch effort")
+	var initial_rows: int = game.preview().rows_due
+	game.model.advance_clock(2.6)
+	check(game.preview().rows_due > initial_rows and game.forecast_cache.size() == 1, "A stationary preview updates the owed row count without repeating board simulation")
+	game.model.lesson = 2
+	check(game.preview().time_bonus == 0.0, "Training previews never gain clock rewards")
+	game.queue_free()
+	await process_frame
+	DirAccess.remove_absolute(path)
+
+# Clock accounting intentionally survives undo; random future and game content do not.
+func without_clock(data: Dictionary) -> Dictionary:
+	var result := data.duplicate(true)
+	for key in ["active_seconds", "rise_remaining", "rise_period", "effort_seconds", "pending_effort"]:
+		result.erase(key)
+	return result
+
+func same_checkpoint(a: Dictionary, b: Dictionary) -> bool:
+	if a.keys().size() != b.keys().size():
+		return false
+	for key in b:
+		if not a.has(key):
+			return false
+		if b[key] is float:
+			if not is_equal_approx(float(a[key]), b[key]):
+				return false
+		elif a[key] != b[key]:
+			return false
+	return true
+
+func test_punch_effort() -> void:
+	var model := RoundModel.new()
+	model.reset(700, 1)
+	var training := model.snapshot()
+	var forecast := model.forecast(0, LessonBook.GOALS[1])
+	check(forecast.effort == 0 and forecast.clock_delta == 0, "Training forecasts charge no punch effort")
+	model.play(0, LessonBook.GOALS[1])
+	check(model.effort_seconds == 0 and model.rise_remaining == training.rise_remaining, "Training cuts preserve the full clock")
+	model.reset(700, 1)
+	model.lesson = -1
+	model.turns = 200
+	model.rise_period = 4.0
+	model.rise_remaining = .1
+	forecast = model.forecast(0, LessonBook.GOALS[1])
+	var before := model.snapshot()
+	var events := model.play(0, LessonBook.GOALS[1])
+	check(not events.is_empty() and model.turns == 201, "A last-moment legal cut resolves before its owed rise")
+	check(is_equal_approx(model.effort_seconds, forecast.effort), "Successful cuts record the complete forecast punch cost")
+	check(model.rise_remaining == 0 and is_equal_approx(model.pending_effort, forecast.effort - forecast.time_bonus - .1), "Punch overshoot is retained as owed clock debt")
+	check(RoundModel.valid(model.snapshot()), "An expired clock with owed effort remains a valid checkpoint")
+	var clone := RoundModel.new()
+	check(clone.restore(model.snapshot()), "Saving an owed rise preserves punch debt")
+	var blocked := model.snapshot()
+	check(model.play(model.selected, CutterManager.placements(model.board, model.tray[model.selected])[0]).is_empty() and model.snapshot() == blocked, "An owed rise cannot be bypassed by another fast punch")
+	var rows := 0
+	while model.rise_remaining <= 0 and not model.over:
+		model.expire_clock()
+		clone.expire_clock()
+		rows += 1
+	check(model.snapshot() == clone.snapshot(), "Saved effort debt produces the identical row and random future")
+	check(rows >= 1 and model.pending_effort == 0, "Owed rises consume all overshoot instead of forgiving fast cuts")
+	var old := before.duplicate(true)
+	old.version = 4
+	old.erase("effort_seconds")
+	old.erase("pending_effort")
+	check(clone.restore(old) and clone.effort_seconds == 0 and clone.pending_effort == 0, "Version-four rounds migrate with no invented past effort")
+	check(clone.board.snapshot() == old.cells and clone.rise_remaining == old.rise_remaining and str(clone.rng.state) == old.rng_state, "Version-four migration preserves board, partial clock and random future")
+	model.reset(700, 2)
+	old = model.snapshot()
+	old.version = 4
+	old.erase("effort_seconds")
+	old.erase("pending_effort")
+	check(clone.restore(old) and clone.lesson == 2 and clone.board.snapshot() == old.cells, "Version-four training retains its existing correct lesson layout")
+	# A four-wave credit can fund thinking after the punch. Undo removes that
+	# credit too, so legitimate debt can exceed cumulative gross punch effort.
+	model.reset(700)
+	model.rise_remaining = .1
+	var pre_chain := model.snapshot()
+	var long_chain_receipt := model.clock_forecast(4)
+	model.effort_seconds += long_chain_receipt.effort
+	model.set_clock_balance(model.rise_remaining + long_chain_receipt.clock_delta)
+	model.advance_clock(.3)
+	check(model.restore_undo(pre_chain), "Undo accepts a chain-funded thinking checkpoint")
+	check(is_equal_approx(model.pending_effort, 1.4) and model.pending_effort > model.effort_seconds, "Undo retains thinking previously funded by the reversed chain reward")
+	check(RoundModel.valid(model.snapshot()), "Chain-funded thinking debt remains a valid checkpoint")
+	var debt_path := "/private/tmp/punch_pop_chain_funded_undo.cfg"
+	var debt_store := SaveStore.new(debt_path)
+	debt_store.round_data = model.snapshot()
+	check(debt_store.save_data(), "Undo debt saves successfully")
+	var debt_reload := SaveStore.new(debt_path)
+	debt_reload.load_data()
+	check(clone.restore(debt_reload.round_data) and is_equal_approx(clone.pending_effort, 1.4), "Disk reload retains undo debt larger than gross effort")
+	model.expire_clock()
+	clone.expire_clock()
+	check(same_checkpoint(model.snapshot(), clone.snapshot()), "Reloaded chain-funded debt settles the identical owed row")
+	DirAccess.remove_absolute(debt_path)
+	for key in ["effort_seconds", "pending_effort"]:
+		for value in [-1.0, INF, NAN]:
+			var corrupt := model.snapshot()
+			corrupt[key] = value
+			check(not RoundModel.valid(corrupt), "Invalid effort accounting is rejected")
+	var corrupt := model.snapshot()
+	corrupt.pending_effort = 1.0
+	corrupt.effort_seconds = 1.0
+	check(not RoundModel.valid(corrupt), "A positive live clock cannot also owe punch debt")
+
+func test_live_effort_debt() -> void:
+	var path := "/private/tmp/punch_pop_live_effort_debt.cfg"
+	DirAccess.remove_absolute(path)
+	var game = load("res://scenes/main.tscn").instantiate()
+	game.save = SaveStore.new(path)
+	game.pressure_enabled = false
+	root.add_child(game)
+	await process_frame
+	game.round_available = true
+	game.reset_transients()
+	game.model.reset(700, 1)
+	game.model.lesson = -1
+	game.model.turns = 200
+	game.model.rise_period = 4.0
+	game.model.rise_remaining = .1
+	game.sync_model()
+	var predicted: Dictionary = game.model.forecast(0, LessonBook.GOALS[1])
+	check(predicted.rows_due == 2, "A late shallow punch truthfully previews two owed rises")
+	await game.place_cutter(LessonBook.GOALS[1])
+	check(game.model.rise_remaining == 0 and game.model.pending_effort > 4, "Live cut keeps both owed rises after its animation")
+	var disk := SaveStore.new(path)
+	disk.load_data()
+	check(disk.round_data.rise_remaining == 0 and is_equal_approx(disk.round_data.pending_effort, game.model.pending_effort), "Interruption preserves the expired clock and all owed punch effort")
+	await game.rise_from_timer()
+	check(game.model.timed_rows == 1 and game.model.rise_remaining == 0 and game.undo_state.is_empty(), "The first owed row clears undo and preserves the next owed rise")
+	await game.rise_from_timer()
+	check(game.model.timed_rows == 2 and game.model.rise_remaining > 0 and game.model.pending_effort == 0 and not game.busy, "Two owed rows finish sequentially and settle the full debt")
+	check(game.board.snapshot() == game.model.board.snapshot(), "Consecutive owed row animations settle on the authoritative board")
+	game.queue_free()
+	await process_frame
+	DirAccess.remove_absolute(path)

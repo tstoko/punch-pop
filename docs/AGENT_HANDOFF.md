@@ -1,12 +1,12 @@
 # Punch Pop — agent handoff
 
-Updated 23 October 2026. Read this and the README before changing the game.
+Updated 26 October 2026. Read this and the README before changing the game.
 
 ## Current direction
 
-The owner approved the v0.7 interface as perfect but found the game far too easy. The current v0.7.1 patch changes balance only: preserve UI/input, shape punches, finite hands and supply setups. The personal test phone is iPhone 15 Pro; packaging/signing remains deferred.
+The owner approved the v0.7 interface but still found v0.7.1 too easy. They authorized a coordinated gameplay improvement. Version 0.8 keeps the layout/input, shape punches, finite hands and supply setups while charging each punch against the visible countdown. The direction is deliberate, efficient cuts and chains rather than shallow rapid cutting. See [game direction](game-direction.md). The personal test phone is iPhone 15 Pro; packaging/signing remains deferred.
 
-The implemented build is **0.7.1**, native portrait Godot 4.5.1. Read [v0.7.1 build notes](v7-1-build-notes.md). The v0.7/v0.6/v0.5 notes, screenshots and policy reports are historical. No physical-device performance or retention claim follows from the automated results.
+The implemented build is **0.8.0**, native portrait Godot 4.5.1. Read [v0.8 build notes](v8-build-notes.md). Earlier build notes, screenshots and policy reports are historical. No physical-device performance or retention claim follows from the automated results.
 
 ## Current rules
 
@@ -14,10 +14,12 @@ The implemented build is **0.7.1**, native portrait Godot 4.5.1. Read [v0.7.1 bu
 - Punches form a finite hand. Used slots stay empty; remaining legal punches are retained until no current card is usable, then a new three-shape hand is dealt. Unusable remaining cards may be discarded after the board changes. Empty slots are valid save data.
 - Gravity settles blocks; connected orthogonal groups of four or more of one colour clear. Successive waves multiply match points. Direct hits earn 10 each, plus 5 each for a completely filled footprint. Automatic points are 20 × wave × block count.
 - Only cut-triggered multi-wave chains earn time: half a second per wave after the first, capped at 1.5 seconds and the current interval. A single automatic wave grants no time. Forecasts include `time_bonus`; actual breathing events carry awarded time. Timer/refill clears do not earn it.
-- The countdown opens at 12 seconds and accelerates to a minimum of 2.75 seconds. Pressure advances every 10 cuts or 20 active seconds. Cuts never reset it. Menus, animation, training and focus loss pause active time.
+- The countdown opens at 12 seconds and row intervals shorten through 10, 8.5, 7, 6, 5, 4.5 and 4 seconds. Pressure advances every eight cuts or 25 active seconds; displayed levels continue beyond eight.
+- A successful arcade punch spends `rise_period × min(1.5, 0.1 + 0.1 × (level - 1))` seconds. The opening cost is 1.2 seconds; a settled late-game cost is six seconds. Chain credit offsets the cost before expiry. The forecast shows net clock change and ROW / ROWS warnings; the footer shows gross cost.
+- Cost beyond zero is carried in `pending_effort` and paid by subsequent clock intervals. Each owed rise still uses the ordinary preview, presentation, checkpoint and atomic-overflow path. No further punch can resolve with an expired clock. Menus, animation, training and focus loss pause active time.
 - Incoming supply uses bounded candidate rows with pairs/triples and near-bottom punch-created match opportunities. It rejects immediate arrival matches; do not reintroduce idle point farming.
 - Expiry pushes a previewed bottom row upward. An already occupied top row causes atomic loss. Recovery rows appear only if no two-block punch exists.
-- Undo restores board/score/RNG and removes awarded chain time while retaining actual thinking time. Timed rises clear undo.
+- Undo restores board/score/RNG and removes awarded chain time while retaining actual thinking time AND gross punch effort. `RoundModel.restore_undo()` owns this accounting; timed rises clear undo.
 - Training marks a specific goal and accepts its required teaching cut, keeping the example consistent with its explanation.
 - The home menu provides Play/Continue, New Run when saved, optional Learn to Play and Settings. Main Play enters arcade directly. Pause → Main Menu checkpoints the run.
 - Card dragging requires 12 logical pixels of movement. Its full-size footprint sits up to 100 logical pixels above the finger, easing to 40 near the bottom edge; stable nearby placements prevent jitter. Returning to the tray or leaving board bounds cancels. Tapping a card selects it; tap placement remains. Exact Aim is an advanced pause option/keyboard shortcut rather than a main HUD control.
@@ -27,9 +29,9 @@ The implemented build is **0.7.1**, native portrait Godot 4.5.1. Read [v0.7.1 bu
 
 `RoundModel` calculates full turns before presentation. Keep forecast, model events, controller and visible explanations in agreement. Source responsibilities are listed in the README.
 
-Normal player data lives in Godot `user://punch_pop.cfg`, outside the repository. Preserve it. Checkpoint version 4 migrates versions 2 and 3 by changing legacy punch colours to -1 without RNG consumption. Valid endless board, score, clock and RNG state remain; legacy training restarts the same lesson with its new layout; version 2 gains a full initial clock because it predates timer state. Seed/state are strings to preserve 64-bit precision. Tests use isolated temporary saves.
+Normal player data lives in Godot `user://punch_pop.cfg`, outside the repository. Preserve it. Checkpoint version 5 adds `effort_seconds` and `pending_effort`; v2–4 initialize these to zero. Only v2–3 require changing legacy punch colours to -1 without RNG consumption. Version 4 lessons and RNG are preserved. Valid endless board, score, clock and RNG state remain; legacy training restarts the same lesson with its new layout; version 2 gains a full initial clock because it predates timer state. Seed/state are strings to preserve 64-bit precision. Tests use isolated temporary saves.
 
-A timed rise checkpoints the expired clock before animation; interruption must replay the owed rise. The main-menu clock cannot advance. Undo must never retain chain credit or refund active thinking time; compute elapsed time from the pre-cut checkpoint.
+A timed rise checkpoints the expired clock before animation; interruption must replay the owed rise. The main-menu clock cannot advance. Undo must never retain chain credit or refund active thinking time or punch cost; derive both debits from the pre-cut checkpoint.
 
 ## Verification
 
@@ -42,7 +44,7 @@ A timed rise checkpoints the expired clock before animation; interruption must r
 
 The wrapper retains strict engine-error filtering. On macOS it creates a disposable shadow project, with system PEM CA roots to avoid sandboxed Keychain lookup without disabling TLS verification. Never ship that machine-local path in `project.godot`.
 
-Current evidence belongs in `v7-1-build-notes.md`, `v7-1-runtime-smoke.json` and `v7-1-pressure-audit.json`. The flow suite independently verifies present UX/rules; the policy audit counts opening affordability and compares bot strategies. Bot survival and desktop timings are not human engagement or phone performance.
+Current evidence belongs in `v8-build-notes.md`, `v8-runtime-smoke.json` and `v8-pressure-audit.json`. Quick screening reports must remain clearly separated from full cohorts. The flow suite independently verifies present UX/rules; the policy audit counts opening affordability and compares bot strategies. Bot survival and desktop timings are not human engagement or phone performance.
 
 ## Owner workflow
 

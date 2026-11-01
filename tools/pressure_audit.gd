@@ -1,35 +1,50 @@
 extends SceneTree
 
-const EPISODES := 40
-const CAP := 150
+var episodes := 40
+var cap := 150
+var opening_seeds := 100
+var output := "v8-pressure-audit.json"
+var rules := "v0.8 shared countdown: decision time plus punch effort"
+var profiles := [{"policy": "random", "think": 3.0}, {"policy": "greedy", "think": 3.0}, {"policy": "height_aware", "think": 3.0}, {"policy": "height_aware", "think": 0.0}, {"policy": "height_aware", "think": 6.0}, {"policy": "height_aware", "think": 1.5}]
 
 func _initialize() -> void:
 	call_deferred("run")
 
 func run() -> void:
-	var result := {"rules": "v0.7.1 faster pressure + restricted multi-wave credit", "date": "2026-10-23", "action_space": "all legal drag placements, including deliberate partial punches", "episodes_per_policy": EPISODES, "cap": CAP, "cohorts": [], "opening_affordances": opening_affordances()}
+	# Quick mode is a screening cohort, not a replacement for the full report.
+	for argument in OS.get_cmdline_user_args():
+		if argument == "--quick":
+			episodes = 5
+			opening_seeds = 10
+			profiles = profiles.filter(func(p: Dictionary) -> bool: return p.policy == "height_aware" and p.think in [1.5, 3.0])
+		elif argument == "--instant":
+			profiles = [{"policy": "height_aware", "think": 0.0}]
+		elif argument.begins_with("--rules="):
+			rules = argument.trim_prefix("--rules=")
+		elif argument.begins_with("--output="):
+			output = argument.trim_prefix("--output=").get_file()
+	if episodes < 40 and output == "v8-pressure-audit.json":
+		output = "v8-pressure-screening.json"
+	var result := {"rules": rules, "date": "2026-10-26", "action_space": "all legal drag placements, including deliberate partial punches", "episodes_per_policy": episodes, "cap": cap, "cohorts": [], "opening_affordances": opening_affordances()}
 	var began := Time.get_ticks_msec()
-	for profile in [{"policy": "random", "think": 3.0}, {"policy": "greedy", "think": 3.0}, {"policy": "height_aware", "think": 3.0}, {"policy": "height_aware", "think": 0.0}, {"policy": "height_aware", "think": 6.0}, {"policy": "height_aware", "think": 1.5}]:
+	for profile in profiles:
 		var policy: String = profile.policy
 		var sessions: Array = []
-		for episode in EPISODES:
+		for episode in episodes:
 			var model := RoundModel.new()
 			model.reset(20261022 + episode)
 			var choices := RandomNumberGenerator.new()
 			choices.seed = episode + 99
-			var data := {"seed": episode, "turns": 0, "score": 0, "end": "cap", "chain_moves": 0, "match_moves": 0, "timer_match_waves": 0, "refill_match_waves": 0, "earned_seconds": 0.0, "best_chain": 0, "fresh_batches": 0, "stuck": false, "active_seconds": 0.0, "timed_rows": 0}
-			for turn in CAP:
+			var data := {"seed": 20261022 + episode, "turns": 0, "score": 0, "end": "cap", "chain_moves": 0, "match_moves": 0, "timer_match_waves": 0, "refill_match_waves": 0, "earned_seconds": 0.0, "best_chain": 0, "fresh_batches": 0, "stuck": false, "active_seconds": 0.0, "timed_rows": 0}
+			for turn in cap:
+				while model.rise_remaining <= 0 and not model.over:
+					count_arrival_waves(data, model.expire_clock())
 				var thinking: float = profile.think
 				while thinking > 0 and not model.over:
 					var spent := minf(thinking, model.rise_remaining)
 					thinking -= spent
 					if model.advance_clock(spent):
-						for event in model.expire_clock():
-							if event.type == "pop" and event.wave > 0:
-								if event.source == "new_row":
-									data.timer_match_waves += 1
-								elif event.source == "refill":
-									data.refill_match_waves += 1
+						count_arrival_waves(data, model.expire_clock())
 				if model.over:
 					data.end = "overflow"
 					break
@@ -74,9 +89,14 @@ func run() -> void:
 						data.refill_match_waves += 1
 					elif event.type == "breathing":
 						data.earned_seconds += event.seconds
+				# Survival at the cap includes all rows owed by the final punch.
+				while model.rise_remaining <= 0 and not model.over:
+					count_arrival_waves(data, model.expire_clock())
 				if model.over:
 					data.end = "overflow"
 					break
+			data.effort_seconds = model.effort_seconds
+			data.pending_effort = model.pending_effort
 			data.active_seconds = model.active_seconds
 			data.timed_rows = model.timed_rows
 			data.turns = model.turns
@@ -109,7 +129,7 @@ func run() -> void:
 			chain_runs += 1 if s.chain_moves > 0 else 0
 			stuck += 1 if s.stuck else 0
 			capped += 1 if s.end == "cap" else 0
-		var cohort := {"policy": policy, "decision_seconds": profile.think, "median_moves": turns[EPISODES / 2], "p10_moves": turns[EPISODES / 10], "p90_moves": turns[EPISODES * 9 / 10], "mean_moves": float(total_turns) / EPISODES, "mean_score": float(total_score) / EPISODES, "cut_match_moves_per_100": float(match_moves) / maxi(1, total_turns) * 100, "timer_match_waves": timer_waves, "refill_match_waves": refill_waves, "earned_seconds": earned_seconds, "chain_moves_per_100": float(chain_moves) / maxi(1, total_turns) * 100, "runs_with_cut_chain": chain_runs, "stuck_runs": stuck, "capped_runs": capped, "sessions": sessions}
+		var cohort := {"policy": policy, "decision_seconds": profile.think, "median_moves": turns[episodes / 2], "p10_moves": turns[episodes / 10], "p90_moves": turns[episodes * 9 / 10], "mean_moves": float(total_turns) / episodes, "mean_score": float(total_score) / episodes, "cut_match_moves_per_100": float(match_moves) / maxi(1, total_turns) * 100, "timer_match_waves": timer_waves, "refill_match_waves": refill_waves, "earned_seconds": earned_seconds, "chain_moves_per_100": float(chain_moves) / maxi(1, total_turns) * 100, "runs_with_cut_chain": chain_runs, "stuck_runs": stuck, "capped_runs": capped, "sessions": sessions}
 		var uncapped: Array = sessions.filter(func(s: Dictionary) -> bool: return s.end != "cap").map(func(s: Dictionary) -> int: return s.turns)
 		uncapped.sort()
 		cohort.uncapped_runs = uncapped.size()
@@ -119,16 +139,16 @@ func run() -> void:
 		summary.erase("sessions")
 		print(JSON.stringify(summary))
 	result.elapsed_seconds = (Time.get_ticks_msec() - began) / 1000.0
-	var file := FileAccess.open("res://docs/v7-1-pressure-audit.json", FileAccess.WRITE)
+	var file := FileAccess.open("res://docs/" + output, FileAccess.WRITE)
 	file.store_string(JSON.stringify(result, "\t"))
-	print("Saved docs/v7-1-pressure-audit.json")
+	print("Saved docs/" + output)
 	quit()
 
 # Count available opening choices independently of any bot decision policy.
 func opening_affordances() -> Dictionary:
-	var report := {"seeds": 100, "all_three_shapes": 0, "seeds_with_perfect": 0, "seeds_with_match": 0, "seeds_with_multiwave": 0, "minimum_legal_placements": 100000}
+	var report := {"seeds": opening_seeds, "all_three_shapes": 0, "seeds_with_perfect": 0, "seeds_with_match": 0, "seeds_with_multiwave": 0, "minimum_legal_placements": 100000}
 	var reset_ms: Array = []
-	for seed_value in 100:
+	for seed_value in opening_seeds:
 		var model := RoundModel.new()
 		var began := Time.get_ticks_usec()
 		model.reset(20261022 + seed_value)
@@ -154,5 +174,13 @@ func opening_affordances() -> Dictionary:
 		report.seeds_with_multiwave += int(has_chain)
 		report.minimum_legal_placements = mini(report.minimum_legal_placements, count)
 	reset_ms.sort()
-	report.reset_ms = {"median": reset_ms[50], "p95": reset_ms[95], "maximum": reset_ms.back(), "samples": reset_ms.size()}
+	report.reset_ms = {"median": reset_ms[opening_seeds / 2], "p95": reset_ms[mini(opening_seeds - 1, int(opening_seeds * .95))], "maximum": reset_ms.back(), "samples": reset_ms.size()}
 	return report
+
+func count_arrival_waves(data: Dictionary, events: Array) -> void:
+	for event in events:
+		if event.type == "pop" and event.wave > 0:
+			if event.source == "new_row":
+				data.timer_match_waves += 1
+			elif event.source == "refill":
+				data.refill_match_waves += 1

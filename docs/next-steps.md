@@ -1,5 +1,7 @@
 # Punch Pop — next steps
 
+**Historical review, superseded 26 October 2026.** The local v0.7.1 state was subsequently committed, and v0.8.0 now implements punch costs, live clock forecasts and compatible save accounting. Use [game direction](game-direction.md) and [v0.8 build notes](v8-build-notes.md) for current priorities and evidence. The GitHub synchronization and device milestones below still need completion.
+
 Reviewed 24 October 2026 against GitHub `main` at `76f61f1e87b2336359ebe0a2503783242863cf16` and the local v0.7.1 working tree.
 
 ## Recommendation

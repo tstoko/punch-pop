@@ -338,7 +338,12 @@ func preview() -> Dictionary:
 	var origin := preview_origin()
 	if not forecast_cache.has(origin):
 		forecast_cache[origin] = model.forecast(selected, origin)
-	return forecast_cache[origin]
+	var prediction: Dictionary = forecast_cache[origin]
+	if not prediction.is_empty():
+		# Keep the expensive board resolution cached while aiming. Clock credit
+		# and punch effort depend on decision time, even at the same origin.
+		prediction.merge(model.clock_forecast(prediction.waves), true)
+	return prediction
 
 # Card drags track the stamp centre above the finger. Snap only nearby legal
 # placements and retain the current choice until another is clearly closer.
@@ -534,7 +539,7 @@ func present_events(events: Array, before: Dictionary, old_level: int, old_best:
 	elif tutorial == 0 and score >= target_after(int(before.score)):
 		celebrate("%s POINTS!" % target_after(int(before.score)))
 	elif SupplySystem.pressure_level(turns, model.active_seconds) > old_level:
-		message("Level %d · rows arrive faster" % SupplySystem.pressure_level(turns, model.active_seconds))
+		message("Level %d · punch cost −%.1fs" % [SupplySystem.pressure_level(turns, model.active_seconds), model.punch_effort()])
 	if pause_after_move and overlay.is_empty():
 		overlay = "pause"
 	pause_after_move = false
@@ -568,18 +573,12 @@ func undo_move() -> void:
 	if busy or undo_state.is_empty():
 		return
 	var previous := undo_state.duplicate(true)
-	var seconds := model.active_seconds
-	var remaining := model.rise_remaining
 	reset_transients()
-	if model.restore(previous):
-		var time_since_cut := maxf(0, seconds - model.active_seconds)
-		var without_bonus := maxf(0, model.rise_remaining - time_since_cut)
-		model.active_seconds = maxf(seconds, model.active_seconds)
-		model.rise_remaining = minf(remaining, without_bonus)
+	if model.restore_undo(previous):
 		undo_state = {}
 		sync_model()
 		checkpoint()
-		message("Move undone. The pressure clock keeps its time.")
+		message("Move undone. Time and punch cost stay spent.")
 
 func next_lesson() -> void:
 	var index := model.lesson + 1

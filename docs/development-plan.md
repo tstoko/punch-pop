@@ -2,11 +2,11 @@
 
 **Goal:** Develop a satisfying, replayable mobile puzzle game with potential for advertising revenue.
 
-**Current direction (23 October 2026):** v0.7.1 keeps the approved v0.7 interface and controls while increasing pressure and reducing time rewards; the owner found the previous balance too easy. The owner will use an iPhone 15 Pro for personal testing; iOS packaging is deferred.
+**Current direction (26 October 2026):** v0.8.0 keeps the approved interface and controls while making every arcade punch spend the visible countdown. Costs grow over the run and chains return time, so efficient board decisions matter more. See [game direction](game-direction.md) for the current release sequence. The owner will use an iPhone 15 Pro for personal testing; iOS packaging is deferred.
 
 **Platform:** Portrait mobile. An Android export preset exists; physical-device QA remains.
 
-The schedule below is the original planning baseline, not a current completion report. See [the agent handoff](AGENT_HANDOFF.md) and [v0.7.1 build notes](v7-1-build-notes.md) for the implemented state.
+The schedule below is the original planning baseline, not a current completion report. See [the agent handoff](AGENT_HANDOFF.md) and [v0.8 build notes](v8-build-notes.md) for the implemented state.
 
 **Technology:** Godot 4, GDScript, 2D graphics.
 
@@ -22,7 +22,7 @@ The player receives a hand of three shape punches: a corner, a straight line and
 3. Blocks above the cleared spaces fall downward.
 4. Connected groups of four or more matching blocks automatically explode.
 5. Further falling blocks can produce chain reactions, increasing the combo multiplier.
-6. A visible decision clock starts at 12 seconds and adds a bottom row at expiry; cuts never reset it. Pressure gradually accelerates. Recovery rows are added only when no legal cutter remains.
+6. A visible decision clock starts at 12 seconds and adds a bottom row at expiry; punches spend that same countdown and chain credit offsets their cost. Pressure gradually accelerates. Recovery rows are added only when no legal cutter remains.
 7. The game ends if a rise would push an existing top-row block out of the board.
 
 **Objective:** Survive as long as possible and achieve the highest score.
