@@ -75,6 +75,17 @@ var row_rising := false
 var rise_t := 0.0
 var rising_colors: Array = []
 var replay_rect := Rect2(95, 698, 350, 60)
+# Presentation-only juice: an easing score, praise words and meter animation.
+var shown_score := 0.0
+var praise := ""
+var praise_time := 0.0
+var praise_tint := Color.WHITE
+var streak := 0
+var streak_pulse := 0.0
+var meter_shown := 0.0
+var level_flash := 0.0
+var flash := 0.0
+const PRAISE := ["", "GOOD!", "GREAT!", "EXCELLENT!", "AMAZING!", "UNBELIEVABLE!"]
 
 func _ready() -> void:
 	save.load_data()
@@ -90,6 +101,8 @@ func _ready() -> void:
 		if save.round_data.get("version", 0) < RoundModel.VERSION and model.lesson >= 0:
 			undo_state = {}
 		sync_model()
+		shown_score = score
+		meter_shown = model.meter
 		round_available = true
 		overlay = "home"
 	else:
@@ -128,6 +141,8 @@ func start_game(force_tutorial: bool = false) -> void:
 	model.reset(-1, 0 if force_tutorial else -1)
 	undo_state = {}
 	sync_model()
+	shown_score = score
+	meter_shown = model.meter
 	checkpoint()
 
 func reset_transients() -> void:
@@ -160,6 +175,8 @@ func reset_transients() -> void:
 	celebration_time = 0
 	shake = 0
 	notice_time = 0
+	praise_time = 0
+	flash = 0
 	if is_instance_valid(effects):
 		effects.particles.clear()
 		effects.rings.clear()
@@ -172,6 +189,7 @@ func sync_model() -> void:
 	turns = model.turns
 	combo = model.combo
 	best_combo = model.best_combo
+	streak = model.streak
 	over = model.over
 	tutorial = model.lesson + 1
 	tray_insights.clear()
@@ -212,7 +230,12 @@ func _process(delta: float) -> void:
 		f.life -= delta
 		f.p.y -= delta * (12 if save.reduced_motion else 32)
 	floaters = floaters.filter(func(f: Dictionary) -> bool: return f.life > 0)
-	tick_pressure(delta)
+	praise_time = maxf(0, praise_time - delta)
+	streak_pulse = maxf(0, streak_pulse - delta * 2.5)
+	level_flash = maxf(0, level_flash - delta)
+	flash = maxf(0, flash - delta * 3.0)
+	shown_score = move_toward(shown_score, score, maxf(12.0, absf(score - shown_score) * 9.0) * delta)
+	meter_shown = lerpf(meter_shown, float(model.meter), minf(1.0, delta * 10.0))
 	effects.visible = overlay.is_empty()
 	ui.queue_redraw()
 
@@ -391,16 +414,20 @@ func release(p: Vector2) -> void:
 		var origin := preview_origin()
 		var allowed := (drag_from_card and drag_active) or (not drag_from_card and Rect2(BOARD_POS, Vector2(420, 540)).has_point(p))
 		if allowed and selected >= 0 and selected < tray.size():
-			if CutterManager.hits(board, tray[selected], origin).size() >= 2:
+			if not CutterManager.legal_hits(board, tray[selected], origin).is_empty():
 				place_cutter(origin)
 			elif drag_from_card:
-				message("Drag over 2+ blocks. Release to punch.")
+				message("The whole shape must sit on blocks.")
 			else:
-				message("Cover at least two blocks. Colours can mix.")
+				message("Every square of the shape needs a block under it.")
 	cancel_gesture()
 
+# v0.9 is turn-based: decision time never raises rows. Retained so legacy
+# harnesses can still drive an old clock explicitly.
 func tick_pressure(delta: float) -> void:
 	if not pressure_enabled or busy or over or tutorial > 0 or not overlay.is_empty():
+		return
+	if model.rise_remaining > 0:
 		return
 	var previous := model.rise_remaining
 	if model.advance_clock(minf(delta, .25)):
@@ -415,7 +442,7 @@ func rise_from_timer() -> void:
 	undo_state = {}
 	checkpoint()
 	var before := model.snapshot()
-	var old_level := SupplySystem.pressure_level(turns, model.active_seconds)
+	var old_level := SupplySystem.play_level(turns)
 	var old_best := save.best
 	var events := model.expire_clock()
 	if not events.is_empty():
@@ -427,7 +454,7 @@ func place_cutter(origin: Vector2i) -> void:
 	var before := model.snapshot()
 	# Preserve both the completed board and its current clock during animation.
 	checkpoint()
-	var old_level := SupplySystem.pressure_level(turns, model.active_seconds)
+	var old_level := SupplySystem.play_level(turns)
 	var old_best := save.best
 	var events := model.play(selected, origin)
 	if events.is_empty():
@@ -453,7 +480,7 @@ func present_events(events: Array, before: Dictionary, old_level: int, old_best:
 						set_phase("cut", "PERFECT CUT!", "Full cutter · +%d bonus points" % event.get("bonus", 0))
 						celebrate("PERFECT CUT +%d" % event.get("bonus", 0))
 					else:
-						set_phase("cut", "PUNCH %d" % event.points.size(), "Every block inside the shape pops.")
+						set_phase("cut", "PUNCH %d" % event.points.size(), "Every block under the shape pops.")
 				else:
 					var title := "%d GROUPS OF 4+ CONNECTED" % event.groups.size()
 					if event.groups.size() == 1:
@@ -480,8 +507,6 @@ func present_events(events: Array, before: Dictionary, old_level: int, old_best:
 					center += cell_center(point)
 				center /= event.points.size()
 				add_floater("+%d" % event.earned, center, ACCENT)
-				if event.wave > 1:
-					celebrate("%s ×%d" % ["SUPER CHAIN" if event.wave > 2 else "CHAIN", event.wave])
 				await pop_cells(event.points, event.wave)
 				anticipating.clear()
 				match_groups.clear()
@@ -518,13 +543,22 @@ func present_events(events: Array, before: Dictionary, old_level: int, old_best:
 				row_rising = false
 				rising_colors.clear()
 				incoming = event.next.duplicate()
-			"breathing":
-				if event.get("seconds", 0.0) > 0:
-					add_floater("+%.1fs" % event.seconds, Vector2(434, 252), ACCENT)
+			"streak":
+				streak = event.streak
+				if event.streak >= 2:
+					streak_pulse = 1.0
+					add_floater("STREAK ×%d  +%d" % [event.multiplier, event.earned], Vector2(270, 250), Color("ffd45c"))
+					effects.sound("streak", mini(event.streak, 7))
+				elif event.streak == 0 and model.lesson < 0:
+					pass
+			"meter":
+				if event.meter >= event.capacity:
+					set_phase("supply", "ROW INCOMING", "Plain punches fill the meter fastest. Matches slow it.")
 			"fresh":
 				set_phase("supply", "FRESH CHANCE", "No legal cut remains. Fresh blocks keep you playing.")
 				await get_tree().create_timer(.08).timeout
 	last_summary = TurnSummary.from_events(events)
+	announce(last_summary, events)
 	last_clear_time = 1.4 if last_summary.matched > 0 else 0.0
 	sync_model()
 	busy = false
@@ -538,12 +572,35 @@ func present_events(events: Array, before: Dictionary, old_level: int, old_best:
 		celebrate("NEW BEST!")
 	elif tutorial == 0 and score >= target_after(int(before.score)):
 		celebrate("%s POINTS!" % target_after(int(before.score)))
-	elif SupplySystem.pressure_level(turns, model.active_seconds) > old_level:
-		message("Level %d · punch cost −%.1fs" % [SupplySystem.pressure_level(turns, model.active_seconds), model.punch_effort()])
+	elif tutorial == 0 and SupplySystem.play_level(turns) > old_level:
+		level_flash = 1.6
+		effects.sound("level", 0)
+		message("Level %d · plain punches now fill %d/12 of the meter" % [SupplySystem.play_level(turns), SupplySystem.meter_cost(0, turns)])
 	if pause_after_move and overlay.is_empty():
 		overlay = "pause"
 	pause_after_move = false
 	checkpoint()
+
+# Praise scales with how clever the punch was: matched blocks, chain depth
+# and streak. Plain punches stay quiet so good play is what feels loud.
+func announce(summary: Dictionary, events: Array) -> void:
+	if summary.matched <= 0:
+		return
+	var tier := 1
+	if summary.matched >= 7 or streak >= 3:
+		tier = 2
+	if summary.chain >= 2:
+		tier = 3
+	if summary.chain >= 3 or (summary.chain >= 2 and streak >= 4):
+		tier = 4
+	if summary.chain >= 4 or summary.matched >= 16:
+		tier = 5
+	praise = PRAISE[tier]
+	praise_time = 1.25
+	praise_tint = [Color.WHITE, Color("8ff7c8"), Color("7fd3ff"), Color("ffd45c"), Color("ff8fd8"), Color("ffb347")][tier]
+	if tier >= 3:
+		flash = minf(1.0, .35 + tier * .12)
+		effects.sound("praise", tier)
 
 func set_phase(stage: String, title: String, detail: String) -> void:
 	phase = stage
@@ -560,9 +617,11 @@ func pop_cells(points: Array, wave: int) -> void:
 	anim_t = 0
 	effects.sound("cut" if wave == 0 else "chain" if wave > 1 else "match", wave)
 	for p in points:
-		effects.burst(cell_center(p), board.at(p), 5 if save.reduced_motion else 8 + wave * 3, wave)
+		effects.burst(cell_center(p), board.at(p), 5 if save.reduced_motion else 10 + wave * 4, wave)
 	if wave > 0:
-		shake = minf(3.5, 1 + wave)
+		shake = minf(6.0, 1.5 + wave * 1.5)
+	if wave >= 2:
+		effects.confetti(cell_center(points[points.size() / 2]), 18 + wave * 8)
 	var tween := create_tween()
 	tween.tween_property(self, "anim_t", 1.0, .07 if save.reduced_motion else (.08 if wave == 0 else .12 if wave == 1 else .16)).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_IN)
 	await tween.finished
@@ -578,7 +637,8 @@ func undo_move() -> void:
 		undo_state = {}
 		sync_model()
 		checkpoint()
-		message("Move undone. Time and punch cost stay spent.")
+		shown_score = score
+		message("Move undone.")
 
 func next_lesson() -> void:
 	var index := model.lesson + 1
@@ -594,7 +654,7 @@ func finish_tutorial() -> void:
 	save.tutorial_done = true
 	save.save_data()
 	start_game()
-	message("Punch blocks. Match 4. Make chains.", 3)
+	message("Fit shapes on blocks. Match 4. Chain for time.", 3)
 
 # Targets are presentation only: undo and resumed rounds derive them from score.
 func target_after(value: int) -> int:
@@ -619,6 +679,12 @@ func score_progress() -> float:
 func celebrate(value: String) -> void:
 	celebration = value
 	celebration_time = 1.6
+	praise = value
+	praise_time = 1.25
+	praise_tint = ACCENT
+	if value == "NEW BEST!":
+		effects.confetti(Vector2(270, 560), 70)
+		effects.sound("praise", 5)
 
 func add_floater(value: String, at: Vector2, color: Color) -> void:
 	floaters.append({"text": value, "p": at, "color": color, "life": .9})

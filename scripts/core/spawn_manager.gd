@@ -58,11 +58,14 @@ static func rise_row(board: BoardManager, colors: Array) -> bool:
 
 # Preview once and keep it. Favour small colour clusters that can be joined
 # by a deliberate punch, without awarding an automatic clear on arrival.
-static func pressure_row(board: BoardManager, rng: RandomNumberGenerator) -> Array:
+# Generosity is the chance this row is searched for a punch-and-match setup.
+# Later levels deal plainer rows so board-reading skill, not speed, decides runs.
+static func pressure_row(board: BoardManager, rng: RandomNumberGenerator, generosity: float = 1.0) -> Array:
 	var colors: Array = []
 	var best: Array = []
 	var best_links := -1
 	var tested := 0
+	var curated := generosity >= 1.0 or rng.randf() < generosity
 	for attempt in 64:
 		colors = clustered_row(rng)
 		var trial := BoardManager.new()
@@ -71,6 +74,8 @@ static func pressure_row(board: BoardManager, rng: RandomNumberGenerator) -> Arr
 			return colors.duplicate()
 		if not MatchSystem.groups(trial).is_empty():
 			continue
+		if not curated:
+			return colors.duplicate()
 		tested += 1
 		if row_has_cascade(trial):
 			return colors.duplicate()
@@ -129,13 +134,13 @@ static func row_has_cascade(board: BoardManager) -> bool:
 			break
 	if not upper_blocks:
 		return false
-	for shape in CutterManager.SHAPES.size():
+	for shape in CutterManager.shape_count:
 		var cutter := {"shape": shape, "color": -1}
 		for y in range(6, 9):
 			for x in 7:
 				var origin := Vector2i(x, y)
-				var hits := CutterManager.hits(board, cutter, origin)
-				if hits.size() < 2:
+				var hits := CutterManager.legal_hits(board, cutter, origin)
+				if hits.is_empty():
 					continue
 				var trial := BoardManager.new()
 				trial.cells = board.snapshot()

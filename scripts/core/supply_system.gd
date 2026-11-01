@@ -1,39 +1,78 @@
 class_name SupplySystem
 extends RefCounted
 
+# --- Turn-based pressure (v0.9) -------------------------------------------
+# No clock: think as long as you like. The row meter holds METER_CAPACITY
+# units (one row). A plain punch costs PLAIN_COST for its level, a matching
+# punch two thirds of that, and a chain a quarter (free before CHAIN_FREE_UNTIL).
+# A full meter raises the previewed row, so clever matches keep the stack low.
+const LEVEL_PUNCHES := 8
+const METER_CAPACITY := 12
+const PLAIN_COST := [8, 9, 11, 12, 13, 14, 16, 17, 18, 20, 22, 24]
+const MATCH_SHARE := .67
+const CHAIN_FREE_UNTIL := 5
+# Incoming rows are searched for punch-and-match setups less often each level.
+const MIN_GENEROSITY := .25
+
+# --- Legacy pressure clock (checkpoint versions 3-5) ----------------------
+# Retained so older saves validate and their clock fields remain readable.
 const INITIAL_INTERVAL := 12.0
-# Retain the historical minimum for checkpoint validation. New rounds stop
-# accelerating at four seconds; late pressure comes from costly punches.
 const MIN_INTERVAL := 2.75
 const RISE_INTERVALS := [12.0, 10.0, 8.5, 7.0, 6.0, 5.0, 4.5, 4.0]
-const MAX_EFFORT_RATIO := 1.5
+const MAX_EFFORT_RATIO := 2.5
 
+# Lab-only overrides for balance sweeps. Always empty in the shipped game.
+static var tuning := {}
+
+static func knob(key: String, fallback: Variant) -> Variant:
+	return tuning.get(key, fallback)
+
+static func play_level(turns: int) -> int:
+	return 1 + int(turns / int(knob("level_punches", LEVEL_PUNCHES)))
+
+static func meter_capacity(_turns: int = 0) -> int:
+	return METER_CAPACITY
+
+static func meter_cost(waves: int, turns: int = 0) -> int:
+	var table: Array = knob("plain", PLAIN_COST)
+	var level := play_level(turns)
+	var plain: int = table[mini(table.size(), level) - 1]
+	if waves <= 0:
+		return plain
+	if waves == 1:
+		return int(ceil(plain * float(knob("match_share", MATCH_SHARE))))
+	return 0 if level < int(knob("chain_free_until", CHAIN_FREE_UNTIL)) else int(plain / 4)
+
+static func generosity(turns: int, _active_seconds: float = 0.0) -> float:
+	if tuning.has("generosity"):
+		var table: Array = tuning.generosity
+		return float(table[mini(table.size(), play_level(turns)) - 1])
+	return maxf(MIN_GENEROSITY, 1.0 - .06 * (play_level(turns) - 1))
+
+# Legacy clock helpers. The live game no longer advances the clock.
 static func wave(turns: int) -> int:
 	return 1 + int(turns / 8)
 
-static func pressure_level(turns: int, active_seconds: float) -> int:
-	return maxi(wave(turns), 1 + int(active_seconds / 25.0))
+static func pressure_level(turns: int, active_seconds: float = 0.0) -> int:
+	return maxi(play_level(turns), 1 + int(active_seconds / 25.0)) if active_seconds > 0 else play_level(turns)
 
 static func rise_interval(turns: int, active_seconds: float) -> float:
-	return RISE_INTERVALS[mini(RISE_INTERVALS.size(), pressure_level(turns, active_seconds)) - 1]
+	return RISE_INTERVALS[mini(RISE_INTERVALS.size(), maxi(wave(turns), 1 + int(active_seconds / 25.0))) - 1]
 
-# Effort uses the same visible countdown. Instant shallow tapping cannot
-# bypass supply; efficient gravity clears buy more space for the same cost.
-static func punch_effort(turns: int, active_seconds: float, period: float) -> float:
-	var ratio := minf(MAX_EFFORT_RATIO, .10 + .10 * float(pressure_level(turns, active_seconds) - 1))
-	return period * ratio
+static func punch_effort(_turns: int, _active_seconds: float, _period: float) -> float:
+	return 0.0
 
-# Kept for older presentation/audit callers: the clock is the only pressure.
+static func chain_credit(_waves: int, _effort: float) -> float:
+	return 0.0
+
+static func chain_time(_waves: int) -> float:
+	return 0.0
+
 static func due_rows(_turns: int) -> int:
 	return 0
 
 static func moves_to_drop(_turns: int) -> int:
 	return 0
-
-# Clearing one group already earns space. Reserve clock rescue for a real
-# multi-wave chain so routine matches cannot neutralize the pressure curve.
-static func chain_time(waves: int) -> float:
-	return minf(1.5, maxf(0.0, float(waves - 1) * .5))
 
 static func height(board: BoardManager, x: int) -> int:
 	var count := 0

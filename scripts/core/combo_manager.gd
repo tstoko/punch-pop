@@ -2,11 +2,18 @@ class_name ComboManager
 extends RefCounted
 
 static func cut_score(count: int) -> int:
-	return count * 10
+	return count * (15 if CutterManager.full_footprint else 10)
 
-# Reward a completely filled footprint; partial cuts keep their base score.
+# Partial-punch rules reward a filled footprint. Under the full-footprint rule
+# every punch is full, so its value is already in the base score.
 static func perfect_bonus(count: int, footprint: int) -> int:
+	if CutterManager.full_footprint:
+		return 0
 	return count * 5 if count >= 3 and count == footprint else 0
+
+# Consecutive matching punches multiply that punch's points.
+static func streak_multiplier(streak: int) -> int:
+	return clampi(streak, 1, 10)
 
 static func match_score(count: int, wave: int) -> int:
 	return count * 20 * wave

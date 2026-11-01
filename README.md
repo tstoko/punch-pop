@@ -1,4 +1,6 @@
-# Punch Pop · 0.8.0
+# Punch Pop · 0.9.0
+
+> **0.9.0 work in progress — this README below still describes 0.8.0.** 0.9 is turn-based (no clock): every square of a shape must sit on a block, a new PILLAR shape joins the hand, each punch fills a NEXT ROW meter (matching punches fill it less, early chains are free), and consecutive matching punches build a score streak. The presentation was rebuilt with glossy blocks, match previews and praise pop-ups. Balance comes from `tools/curve_lab.gd` bot sweeps (`./tools/test.sh --lab`). The core and flow test suites have **not** been updated for these rules yet and currently fail.
 
 A colourful portrait puzzle game in Godot 4.5+. Punch a shape through the blocks, let them fall and connect colours for chains. Version 0.8 keeps the approved shape-punch interface and makes efficient decisions matter: punches spend the pressure clock, chains earn time back, and punch costs increase through the run.
 

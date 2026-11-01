@@ -4,9 +4,14 @@ extends RefCounted
 const SHAPES := [
 	[Vector2i(0, 0), Vector2i(0, 1), Vector2i(1, 1)],
 	[Vector2i(0, 0), Vector2i(1, 0), Vector2i(2, 0)],
-	[Vector2i(0, 0), Vector2i(1, 0), Vector2i(0, 1), Vector2i(1, 1)]
+	[Vector2i(0, 0), Vector2i(1, 0), Vector2i(0, 1), Vector2i(1, 1)],
+	[Vector2i(0, 0), Vector2i(0, 1), Vector2i(0, 2)]
 ]
-const NAMES := ["CORNER", "LINE", "SQUARE"]
+const NAMES := ["CORNER", "LINE", "SQUARE", "PILLAR"]
+# v0.9: every cell of the footprint must land on a block. The PILLAR keeps
+# lone towers reachable. Both remain switchable for balance comparisons.
+static var full_footprint := true
+static var shape_count := 4
 
 static func hits(board: BoardManager, cutter: Dictionary, origin: Vector2i) -> Array:
 	if cutter.is_empty():
@@ -21,18 +26,25 @@ static func hits(board: BoardManager, cutter: Dictionary, origin: Vector2i) -> A
 			result.append(p)
 	return result
 
+# The cells a legal punch removes, or an empty array for an illegal placement.
+static func legal_hits(board: BoardManager, cutter: Dictionary, origin: Vector2i) -> Array:
+	var result := hits(board, cutter, origin)
+	if result.size() < 2 or (full_footprint and result.size() < SHAPES[cutter.shape].size()):
+		return []
+	return result
+
 static func placements(board: BoardManager, cutter: Dictionary) -> Array:
 	var result: Array = []
 	for y in BoardManager.HEIGHT:
 		for x in BoardManager.WIDTH:
 			var p := Vector2i(x, y)
-			if hits(board, cutter, p).size() >= 2:
+			if not legal_hits(board, cutter, p).is_empty():
 				result.append(p)
 	return result
 
 static func candidates(board: BoardManager) -> Array:
 	var result: Array = []
-	for shape in SHAPES.size():
+	for shape in shape_count:
 		var cutter := {"shape": shape, "color": -1}
 		if not placements(board, cutter).is_empty():
 			result.append(cutter)
@@ -62,7 +74,7 @@ static func target_map(board: BoardManager, cutter: Dictionary) -> Dictionary:
 	var targets := {}
 	var ranks := {}
 	for origin in placements(board, cutter):
-		var matching := hits(board, cutter, origin)
+		var matching := legal_hits(board, cutter, origin)
 		for p in matching:
 			var rank: int = matching.size() * 100 - p.distance_squared_to(origin)
 			if not ranks.has(p) or rank > ranks[p]:
@@ -110,6 +122,6 @@ static func hand_refresh(board: BoardManager, tray: Array, rng: RandomNumberGene
 		var held: Dictionary = options[i]
 		options[i] = options[other]
 		options[other] = held
-	for i in options.size():
+	for i in mini(3, options.size()):
 		result[i] = options[i].duplicate()
 	return result

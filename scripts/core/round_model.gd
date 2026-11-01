@@ -1,7 +1,7 @@
 class_name RoundModel
 extends RefCounted
 
-const VERSION := 5
+const VERSION := 6
 var board := BoardManager.new()
 var rng := RandomNumberGenerator.new()
 var tray: Array = []
@@ -25,6 +25,11 @@ var effort_seconds := 0.0
 var pending_effort := 0.0
 var timed_rows := 0
 var end_reason := ""
+# v0.9 turn-based pressure: punches fill the row meter, matches fill it less
+# and chains are free. Consecutive matching punches build a score streak.
+var meter := 0
+var streak := 0
+var best_streak := 0
 
 func reset(seed_value: int = -1, lesson_index: int = -1) -> void:
 	if seed_value == -1:
@@ -48,6 +53,9 @@ func reset(seed_value: int = -1, lesson_index: int = -1) -> void:
 	pending_effort = 0.0
 	timed_rows = 0
 	end_reason = ""
+	meter = 0
+	streak = 0
+	best_streak = 0
 	if lesson >= 0:
 		tray = [LessonBook.build(board, lesson), {}, {}]
 	else:
@@ -56,10 +64,10 @@ func reset(seed_value: int = -1, lesson_index: int = -1) -> void:
 	incoming = SpawnManager.pressure_row(board, rng)
 
 func snapshot() -> Dictionary:
-	return {"version": VERSION, "cells": board.snapshot(), "tray": tray.duplicate(true), "incoming": incoming.duplicate(), "score": score, "turns": turns, "combo": combo, "best_combo": best_combo, "selected": selected, "lesson": lesson, "lesson_complete": lesson_complete, "over": over, "fresh_batches": fresh_batches, "cleared": cleared, "active_seconds": active_seconds, "rise_remaining": rise_remaining, "rise_period": rise_period, "effort_seconds": effort_seconds, "pending_effort": pending_effort, "timed_rows": timed_rows, "end_reason": end_reason, "rng_seed": str(rng.seed), "rng_state": str(rng.state)}
+	return {"version": VERSION, "cells": board.snapshot(), "tray": tray.duplicate(true), "incoming": incoming.duplicate(), "score": score, "turns": turns, "combo": combo, "best_combo": best_combo, "selected": selected, "lesson": lesson, "lesson_complete": lesson_complete, "over": over, "fresh_batches": fresh_batches, "cleared": cleared, "active_seconds": active_seconds, "rise_remaining": rise_remaining, "rise_period": rise_period, "effort_seconds": effort_seconds, "pending_effort": pending_effort, "timed_rows": timed_rows, "end_reason": end_reason, "meter": meter, "streak": streak, "best_streak": best_streak, "rng_seed": str(rng.seed), "rng_state": str(rng.state)}
 
 static func valid(data: Dictionary) -> bool:
-	if data.get("version") not in [2, 3, 4, VERSION] or not data.get("cells") is Array or data.cells.size() != 9:
+	if data.get("version") not in [2, 3, 4, 5, VERSION] or not data.get("cells") is Array or data.cells.size() != 9:
 		return false
 	for row in data.cells:
 		if not row is Array or row.size() != 7:
@@ -77,7 +85,7 @@ static func valid(data: Dictionary) -> bool:
 			return false
 		if cutter.is_empty():
 			continue
-		if not cutter.get("shape") is int or not cutter.get("color") is int or cutter.shape < 0 or cutter.shape > 2 or cutter.color < -1 or cutter.color > 3:
+		if not cutter.get("shape") is int or not cutter.get("color") is int or cutter.shape < 0 or cutter.shape >= CutterManager.SHAPES.size() or cutter.color < -1 or cutter.color > 3:
 			return false
 	for key in ["score", "turns", "combo", "best_combo", "selected", "lesson", "fresh_batches", "cleared"]:
 		if not data.get(key) is int:
@@ -103,6 +111,12 @@ static func valid(data: Dictionary) -> bool:
 			if not (data.get(key) is float or data.get(key) is int) or not is_finite(float(data[key])) or data[key] < 0:
 				return false
 		if data.pending_effort > SupplySystem.INITIAL_INTERVAL * SupplySystem.MAX_EFFORT_RATIO or (data.pending_effort > 0 and data.rise_remaining > 0):
+			return false
+	if data.version >= 6:
+		for key in ["meter", "streak", "best_streak"]:
+			if not data.get(key) is int or data[key] < 0:
+				return false
+		if data.meter >= SupplySystem.METER_CAPACITY:
 			return false
 	# Round checkpoints must be settled, including authored lesson layouts.
 	var trial := BoardManager.new()
@@ -151,6 +165,9 @@ func restore(data: Dictionary) -> bool:
 	pending_effort = float(data.pending_effort) if data.version >= 5 else 0.0
 	timed_rows = data.timed_rows if data.version >= 3 else 0
 	end_reason = data.end_reason if data.version >= 3 else ""
+	meter = data.meter if data.version >= 6 else 0
+	streak = data.streak if data.version >= 6 else 0
+	best_streak = data.best_streak if data.version >= 6 else 0
 	if data.version < 4 and lesson >= 0:
 		# Old lessons depended on colour-selective punches. Restart only that
 		# lesson with its matching new layout; endless progress is untouched.
@@ -173,6 +190,9 @@ func restore(data: Dictionary) -> bool:
 	rng.state = int(data.rng_state)
 	return true
 
+func meter_capacity() -> int:
+	return SupplySystem.meter_capacity(turns)
+
 func punch_effort() -> float:
 	return SupplySystem.punch_effort(turns, active_seconds, rise_period) if lesson < 0 else 0.0
 
@@ -180,7 +200,7 @@ func punch_effort() -> float:
 # offset effort before expiry, including a chain played at the last moment.
 func clock_forecast(waves: int) -> Dictionary:
 	var effort := punch_effort()
-	var reward := SupplySystem.chain_time(waves) if lesson < 0 else 0.0
+	var reward := SupplySystem.chain_credit(waves, effort) if lesson < 0 else 0.0
 	reward = minf(reward, maxf(0, rise_period - rise_remaining + pending_effort + effort))
 	var balance := rise_remaining - pending_effort + reward - effort
 	var owed_rows := 0
@@ -216,8 +236,8 @@ func forecast(slot: int, origin: Vector2i, include_board: bool = false) -> Dicti
 		return {}
 	var trial := BoardManager.new()
 	trial.cells = board.snapshot()
-	var hits := CutterManager.hits(trial, tray[slot], origin)
-	if hits.size() < 2:
+	var hits := CutterManager.legal_hits(trial, tray[slot], origin)
+	if hits.is_empty():
 		return {}
 	trial.remove(hits)
 	var result := ComboManager.resolve(trial)
@@ -225,8 +245,13 @@ func forecast(slot: int, origin: Vector2i, include_board: bool = false) -> Dicti
 	var matched := 0
 	for wave in result.waves:
 		matched += wave.cells.size()
-	var prediction := {"hits": hits, "waves": result.waves.size(), "matched": matched, "score": ComboManager.cut_score(hits.size()) + bonus + result.score, "perfect": bonus > 0, "bonus": bonus}
-	prediction.merge(clock_forecast(result.waves.size()))
+	var match_cells: Array = []
+	for wave in result.waves:
+		match_cells.append_array(wave.cells)
+	var base: int = ComboManager.cut_score(hits.size()) + bonus + result.score
+	var next_streak := streak + 1 if result.waves.size() > 0 else 0
+	var pips: int = SupplySystem.meter_cost(result.waves.size(), turns) if lesson < 0 else 0
+	var prediction := {"hits": hits, "waves": result.waves.size(), "matched": matched, "match_cells": match_cells, "score": base * ComboManager.streak_multiplier(next_streak), "perfect": bonus > 0, "bonus": bonus, "streak": next_streak, "pips": pips, "rows_due": int((meter + pips) / meter_capacity()) if lesson < 0 else 0}
 	if include_board:
 		prediction.cells = trial.snapshot()
 	return prediction
@@ -236,25 +261,38 @@ func play(slot: int, origin: Vector2i) -> Array:
 		return []
 	if over or lesson_complete or (lesson < 0 and rise_remaining <= 0) or slot < 0 or slot >= tray.size() or tray[slot].is_empty():
 		return []
-	var hits := CutterManager.hits(board, tray[slot], origin)
-	if hits.size() < 2:
+	var hits := CutterManager.legal_hits(board, tray[slot], origin)
+	if hits.is_empty():
 		return []
 	var events: Array = []
 	combo = 0
 	var bonus := ComboManager.perfect_bonus(hits.size(), CutterManager.SHAPES[tray[slot].shape].size())
+	var score_before := score
 	remove_event(events, hits, 0, [], "player", bonus)
 	resolve_events(events)
-	if lesson < 0:
-		var receipt := clock_forecast(combo)
-		effort_seconds += receipt.effort
-		set_clock_balance(rise_remaining - pending_effort + receipt.clock_delta)
-		events.append({"type": "effort", "seconds": receipt.effort, "pending": pending_effort})
-		if receipt.time_bonus > 0:
-			events.append({"type": "breathing", "seconds": receipt.time_bonus})
+	var waves := combo
+	streak = streak + 1 if waves > 0 else 0
+	best_streak = maxi(best_streak, streak)
+	var multiplier := ComboManager.streak_multiplier(streak)
+	if multiplier > 1:
+		var extra := (score - score_before) * (multiplier - 1)
+		score += extra
+		events.append({"type": "streak", "streak": streak, "multiplier": multiplier, "earned": extra})
+	elif streak == 0 and waves == 0:
+		events.append({"type": "streak", "streak": 0, "multiplier": 1, "earned": 0})
 	turns += 1
 	if lesson >= 0:
 		lesson_complete = true
 		return events
+	var capacity := meter_capacity()
+	var cost := SupplySystem.meter_cost(waves, turns - 1)
+	meter += cost
+	events.append({"type": "meter", "pips": cost, "meter": mini(meter, capacity), "capacity": capacity})
+	while meter >= capacity:
+		meter -= capacity
+		timed_rows += 1
+		if not drop(events, "scheduled"):
+			return events
 	if not replenish(events, slot):
 		return events
 	if not tray[slot].is_empty():
@@ -324,7 +362,7 @@ func drop(events: Array, reason: String = "scheduled") -> bool:
 	var row_event := {"type": "row", "colors": colors, "next": [], "cells": board.snapshot(), "reason": reason, "direction": "up"}
 	events.append(row_event)
 	resolve_events(events, "refill" if reason == "refill" else "new_row")
-	incoming = SpawnManager.pressure_row(board, rng)
+	incoming = SpawnManager.pressure_row(board, rng, SupplySystem.generosity(turns, active_seconds))
 	row_event.next = incoming.duplicate()
 	return true
 

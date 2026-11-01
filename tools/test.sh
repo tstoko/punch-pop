@@ -40,8 +40,11 @@ elif [[ "${1:-}" == "--flow" ]]; then
 elif [[ "${1:-}" == "--audit" ]]; then
   TEST_SCRIPT=res://tools/pressure_audit.gd
   TEST_SUCCESS='Saved docs/[^/]+\.json'
+elif [[ "${1:-}" == "--lab" ]]; then
+  TEST_SCRIPT=res://tools/curve_lab.gd
+  TEST_SUCCESS='Lab complete'
 elif [[ -n "${1:-}" ]]; then
-  echo 'Usage: tools/test.sh [--real-clock|--flow|--audit]' >&2
+  echo 'Usage: tools/test.sh [--real-clock|--flow|--audit|--lab]' >&2
   exit 2
 fi
 if [[ $# -gt 0 ]]; then

@@ -1,9 +1,9 @@
 class_name EffectsManager
 extends Node2D
 
-const COLORS := [Color("ff9b4a"), Color("55aaff"), Color("42d5a4"), Color("b18bff")]
+const COLORS := [Color("ff8a3d"), Color("3fa9ff"), Color("2fd69a"), Color("a66bff")]
 # A full-board cascade must remain bounded on low-end phones.
-const MAX_PARTICLES := 240
+const MAX_PARTICLES := 320
 const MAX_RINGS := 72
 const SAMPLE_RATE := 22050
 const CHAIN_NOTES := [1.0, 1.125, 1.25, 1.5, 1.6875, 2.0, 2.25, 2.5]
@@ -47,16 +47,27 @@ func burst(at: Vector2, color: int, count: int = 10, wave: int = 0) -> void:
 		for i in amount:
 			var angle := rotation + TAU * float(i) / maxi(amount, 1) + randf_range(-.15, .15)
 			var lifetime := randf_range(.19, .34) + strength * .025
-			particles.append({"p": at, "v": Vector2.from_angle(angle) * randf_range(65, 125 + strength * 24), "life": lifetime, "duration": lifetime, "color": tint.lerp(Color.WHITE, .32 if i % 3 == 0 else .0), "size": randf_range(1.6, 3.5), "spark": i % 3 == 0})
+			particles.append({"p": at, "v": Vector2.from_angle(angle) * randf_range(80, 150 + strength * 30), "life": lifetime, "duration": lifetime, "color": tint.lerp(Color.WHITE, .32 if i % 3 == 0 else .0), "size": randf_range(2.0, 4.2), "spark": i % 3 == 0, "confetti": false, "spin": 0.0})
 	set_process(true)
 	queue_redraw()
+
+# Celebration confetti: tumbling squares in all four block colours.
+func confetti(at: Vector2, amount: int = 40) -> void:
+	if reduced_motion:
+		return
+	amount = mini(amount, MAX_PARTICLES - particles.size())
+	for i in amount:
+		var angle := randf_range(-PI * .92, -PI * .08)
+		var lifetime := randf_range(.7, 1.25)
+		particles.append({"p": at + Vector2(randf_range(-30, 30), 0), "v": Vector2.from_angle(angle) * randf_range(220, 520), "life": lifetime, "duration": lifetime, "color": COLORS[i % 4].lerp(Color.WHITE, .15), "size": randf_range(3.5, 6.5), "spark": false, "confetti": true, "spin": randf_range(-12, 12)})
+	set_process(true)
 
 func sound(kind: String, wave: int = 0) -> void:
 	if haptics_enabled and OS.has_feature("mobile") and kind in ["cut", "match", "chain"]:
 		Input.vibrate_handheld(12 if kind == "cut" else 22 if kind == "match" else 32)
 	if not sound_enabled or voices.is_empty():
 		return
-	var level := clampi(wave, 0, 7) if kind in ["match", "chain"] else 0
+	var level := clampi(wave, 0, 7) if kind in ["match", "chain", "streak", "praise"] else 0
 	var key := kind + str(level)
 	if not clips.has(key):
 		clips[key] = synthesise(kind, level)
@@ -86,6 +97,10 @@ func synthesise(kind: String, wave: int) -> AudioStreamWAV:
 		duration = .06
 	elif kind == "supply":
 		duration = .14
+	elif kind in ["streak", "level"]:
+		duration = .32
+	elif kind == "praise":
+		duration = .55
 	var frames := int(duration * SAMPLE_RATE)
 	var data := PackedByteArray()
 	data.resize(frames * 2)
@@ -103,6 +118,15 @@ func synthesise(kind: String, wave: int) -> AudioStreamWAV:
 			"supply": signal_value = sin(TAU * (210 * t + 430 * t * t)) * .30
 			"match":
 				signal_value = (sin(TAU * pitch * t) + sin(TAU * pitch * 1.5 * t) * .35 + sin(TAU * pitch * 2.0 * t) * .18) * .48
+			"streak", "level", "praise":
+				# A quick rising arpeggio: brighter and longer for bigger moments.
+				var notes := [1.0, 1.25, 1.5, 2.0, 2.5] if kind != "level" else [1.0, 1.5, 2.0, 3.0]
+				var root := pitch * (.75 if kind == "level" else 1.0)
+				for note in notes.size():
+					var local_t := t - note * (.05 if kind == "praise" else .045)
+					if local_t >= 0:
+						var note_envelope := minf(1.0, local_t * 400) * exp(-local_t * 9)
+						signal_value += (sin(TAU * root * notes[note] * local_t) + sin(TAU * root * notes[note] * 2.0 * local_t) * .25) * note_envelope * .26
 			"chain":
 				# Overlapping notes have independent attack/release envelopes;
 				# unlike switching oscillators, this has no boundary clicks.
@@ -124,7 +148,10 @@ func _process(delta: float) -> void:
 		if p.life <= 0:
 			particles.remove_at(i)
 		elif not reduced_motion:
-			p.v.y += 220 * delta
+			p.v.y += (620 if p.confetti else 220) * delta
+			if p.confetti:
+				p.v *= 1.0 - minf(.9, delta * 1.6)
+				p.spin += delta
 			p.p += p.v * delta
 	for i in range(rings.size() - 1, -1, -1):
 		rings[i].life -= delta
@@ -151,7 +178,17 @@ func _draw() -> void:
 		var color: Color = p.color
 		color.a = clampf(p.life / .14, 0, 1)
 		var radius: float = p.size * minf(1, p.life / .13)
-		if p.spark:
+		if p.confetti:
+			var size: float = p.size
+			var turn: float = p.spin * 3.0
+			var squash := absf(cos(turn))
+			var corners := PackedVector2Array()
+			for k in 4:
+				var a := turn + TAU * k / 4.0 + PI / 4.0
+				corners.append(p.p + Vector2(cos(a) * size, sin(a) * size * maxf(.25, squash)))
+			color.a = clampf(p.life / .35, 0, 1)
+			draw_colored_polygon(corners, color)
+		elif p.spark:
 			var direction: Vector2 = p.v.normalized()
 			draw_line(p.p - direction * radius * 2.4, p.p + direction * radius, color, 1.6, true)
 		else:

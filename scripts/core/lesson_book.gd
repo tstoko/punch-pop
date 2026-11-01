@@ -4,9 +4,9 @@ extends RefCounted
 const GOALS := [Vector2i(2, 8), Vector2i(0, 7), Vector2i(0, 5)]
 
 const TITLES := ["PUNCH A SHAPE", "MAKE COLOURS MEET", "ONE FALL. ANOTHER MATCH."]
-const HINTS := ["Punch the three blocks. Every colour inside your shape goes.", "Punch the middle pair. Falling orange makes four connected.", "Punch the top corner. Watch two matches happen in sequence."]
-const SUCCESS := ["PERFECT PUNCH", "FOUR CONNECTED = MATCH", "SECOND MATCH = CHAIN ×2"]
-const EXPLANATIONS := ["Shapes punch every colour. A full shape earns a bonus.", "Four orange blocks touched sides after falling, so they matched.", "The first match opened space for a second. Chains earn breathing time."]
+const HINTS := ["Every square of the shape must sit on a block. Colours can mix.", "Punch the middle row. Falling orange makes four connected.", "Punch the top corner. Watch two matches happen in sequence."]
+const SUCCESS := ["CLEAN PUNCH", "FOUR CONNECTED = MATCH", "SECOND MATCH = CHAIN ×2"]
+const EXPLANATIONS := ["The whole shape fit on blocks, so all of them popped.", "Four orange blocks touched sides after falling, so they matched.", "The first match opened space for a second. Chains refund punch time."]
 
 static func build(board: BoardManager, lesson: int) -> Dictionary:
 	board.clear()
@@ -21,6 +21,9 @@ static func build(board: BoardManager, lesson: int) -> Dictionary:
 		for y in [5, 6, 8]:
 			board.put(Vector2i(1, y), 0)
 		board.put(Vector2i(1, 7), 1)
+		# The line must land fully on blocks: a mixed-colour third cell.
+		board.put(Vector2i(2, 7), 2)
+		board.put(Vector2i(2, 8), 3)
 		return {"shape": 1, "color": -1}
 	chain_pocket(board)
 	return {"shape": 0, "color": -1}
@@ -34,12 +37,12 @@ static func chain_pocket(board: BoardManager) -> void:
 
 # Returns as soon as a discoverable chain exists; it never changes the board.
 static func has_cascade(board: BoardManager, minimum_waves: int = 1) -> bool:
-	for shape in CutterManager.SHAPES.size():
+	for shape in CutterManager.shape_count:
 		var cutter := {"shape": shape, "color": -1}
 		for origin in CutterManager.placements(board, cutter):
 			var trial := BoardManager.new()
 			trial.cells = board.snapshot()
-			trial.remove(CutterManager.hits(trial, cutter, origin))
+			trial.remove(CutterManager.legal_hits(trial, cutter, origin))
 			if ComboManager.resolve(trial).waves.size() >= minimum_waves:
 				return true
 	return false
