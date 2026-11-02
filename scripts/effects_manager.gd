@@ -63,11 +63,11 @@ func confetti(at: Vector2, amount: int = 40) -> void:
 	set_process(true)
 
 func sound(kind: String, wave: int = 0) -> void:
-	if haptics_enabled and OS.has_feature("mobile") and kind in ["cut", "match", "chain"]:
-		Input.vibrate_handheld(12 if kind == "cut" else 22 if kind == "match" else 32)
+	if haptics_enabled and OS.has_feature("mobile") and kind in ["cut", "match", "chain", "heartbeat"]:
+		Input.vibrate_handheld(12 if kind == "cut" else 22 if kind == "match" else 18 if kind == "heartbeat" else 32)
 	if not sound_enabled or voices.is_empty():
 		return
-	var level := clampi(wave, 0, 7) if kind in ["match", "chain", "streak", "praise"] else 0
+	var level := clampi(wave, 0, 7) if kind in ["match", "chain", "streak", "praise", "heartbeat"] else 0
 	var key := kind + str(level)
 	if not clips.has(key):
 		clips[key] = synthesise(kind, level)
@@ -101,6 +101,10 @@ func synthesise(kind: String, wave: int) -> AudioStreamWAV:
 		duration = .32
 	elif kind == "praise":
 		duration = .55
+	elif kind == "heartbeat":
+		duration = .34
+	elif kind == "lost":
+		duration = .42
 	var frames := int(duration * SAMPLE_RATE)
 	var data := PackedByteArray()
 	data.resize(frames * 2)
@@ -127,6 +131,20 @@ func synthesise(kind: String, wave: int) -> AudioStreamWAV:
 					if local_t >= 0:
 						var note_envelope := minf(1.0, local_t * 400) * exp(-local_t * 9)
 						signal_value += (sin(TAU * root * notes[note] * local_t) + sin(TAU * root * notes[note] * 2.0 * local_t) * .25) * note_envelope * .26
+			"heartbeat":
+				# Lub-dub: two low, fast-decaying thumps. Louder on the brink.
+				var gain := .55 + .2 * wave
+				for beat in 2:
+					var local_t := t - beat * .15
+					if local_t >= 0:
+						signal_value += sin(TAU * (68 - 30 * local_t) * local_t) * exp(-local_t * 26) * gain * (1.0 if beat == 0 else 1.6)  # the shared envelope has decayed by the second beat
+			"lost":
+				# A deflating fall: the streak you were protecting is gone.
+				var notes := [1.5, 1.25, 1.0]
+				for note in notes.size():
+					var local_t := t - note * .09
+					if local_t >= 0:
+						signal_value += sin(TAU * 330 * notes[note] * local_t) * minf(1.0, local_t * 400) * exp(-local_t * 11) * .30
 			"chain":
 				# Overlapping notes have independent attack/release envelopes;
 				# unlike switching oscillators, this has no boundary clicks.

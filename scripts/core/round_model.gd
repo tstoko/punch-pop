@@ -67,15 +67,15 @@ func snapshot() -> Dictionary:
 	return {"version": VERSION, "cells": board.snapshot(), "tray": tray.duplicate(true), "incoming": incoming.duplicate(), "score": score, "turns": turns, "combo": combo, "best_combo": best_combo, "selected": selected, "lesson": lesson, "lesson_complete": lesson_complete, "over": over, "fresh_batches": fresh_batches, "cleared": cleared, "active_seconds": active_seconds, "rise_remaining": rise_remaining, "rise_period": rise_period, "effort_seconds": effort_seconds, "pending_effort": pending_effort, "timed_rows": timed_rows, "end_reason": end_reason, "meter": meter, "streak": streak, "best_streak": best_streak, "rng_seed": str(rng.seed), "rng_state": str(rng.state)}
 
 static func valid(data: Dictionary) -> bool:
-	if data.get("version") not in [2, 3, 4, 5, VERSION] or not data.get("cells") is Array or data.cells.size() != 9:
+	if data.get("version") not in [2, 3, 4, 5, VERSION] or not data.get("cells") is Array or data.cells.size() != BoardManager.HEIGHT:
 		return false
 	for row in data.cells:
-		if not row is Array or row.size() != 7:
+		if not row is Array or row.size() != BoardManager.WIDTH:
 			return false
 		for value in row:
 			if not value is int or value < -1 or value > 3:
 				return false
-	if not data.get("tray") is Array or data.tray.size() != 3 or not data.get("incoming") is Array or data.incoming.size() != 7:
+	if not data.get("tray") is Array or data.tray.size() != 3 or not data.get("incoming") is Array or data.incoming.size() != BoardManager.WIDTH:
 		return false
 	for color in data.incoming:
 		if not color is int or color < 0 or color > 3:
@@ -230,7 +230,7 @@ func restore_undo(data: Dictionary) -> bool:
 	return true
 
 func forecast(slot: int, origin: Vector2i, include_board: bool = false) -> Dictionary:
-	if lesson >= 0 and origin != LessonBook.GOALS[lesson]:
+	if lesson >= 0 and origin != LessonBook.goal(lesson):
 		return {}
 	if slot < 0 or slot >= tray.size() or tray[slot].is_empty():
 		return {}
@@ -252,12 +252,14 @@ func forecast(slot: int, origin: Vector2i, include_board: bool = false) -> Dicti
 	var next_streak := streak + 1 if result.waves.size() > 0 else 0
 	var pips: int = SupplySystem.meter_cost(result.waves.size(), turns) if lesson < 0 else 0
 	var prediction := {"hits": hits, "waves": result.waves.size(), "matched": matched, "match_cells": match_cells, "score": base * ComboManager.streak_multiplier(next_streak), "perfect": bonus > 0, "bonus": bonus, "streak": next_streak, "pips": pips, "rows_due": int((meter + pips) / meter_capacity()) if lesson < 0 else 0}
+	# A due row cannot rise past a filled top row: this punch would end the run.
+	prediction.lethal = prediction.rows_due > 0 and not SpawnManager.can_spawn(trial)
 	if include_board:
 		prediction.cells = trial.snapshot()
 	return prediction
 
 func play(slot: int, origin: Vector2i) -> Array:
-	if lesson >= 0 and origin != LessonBook.GOALS[lesson]:
+	if lesson >= 0 and origin != LessonBook.goal(lesson):
 		return []
 	if over or lesson_complete or (lesson < 0 and rise_remaining <= 0) or slot < 0 or slot >= tray.size() or tray[slot].is_empty():
 		return []
@@ -362,7 +364,7 @@ func drop(events: Array, reason: String = "scheduled") -> bool:
 	var row_event := {"type": "row", "colors": colors, "next": [], "cells": board.snapshot(), "reason": reason, "direction": "up"}
 	events.append(row_event)
 	resolve_events(events, "refill" if reason == "refill" else "new_row")
-	incoming = SpawnManager.pressure_row(board, rng, SupplySystem.generosity(turns, active_seconds))
+	incoming = SpawnManager.pressure_row(board, rng, SupplySystem.row_generosity(board, turns, active_seconds))
 	row_event.next = incoming.duplicate()
 	return true
 

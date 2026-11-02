@@ -14,8 +14,13 @@ const BG_TOP := Color("1c1850")
 const BG_BOTTOM := Color("461a6b")
 const PANEL := Color(1, 1, 1, .08)
 const EDGE := Color(1, 1, 1, .16)
-const BOARD_POS := Vector2(60, 276)
 const CELL := 60.0
+# 8 × 8 at 60 px fills 480 of the 540 design width. The board sits right
+# under the score; the incoming row (which doubles as the row meter) is below.
+const BOARD_POS := Vector2(30, 236)
+const NEON := Color("39ff14")
+static var BOARD_SIZE: Vector2:
+	get: return Vector2(BoardManager.WIDTH, BoardManager.HEIGHT) * CELL
 var game: Node2D
 var font = ThemeDB.fallback_font
 var display_font: Font = preload("res://assets/fonts/BarlowCondensed-Bold.ttf")
@@ -117,10 +122,10 @@ func _draw() -> void:
 	if game.overlay == "home":
 		draw_home()
 		return
+	draw_peril_vignette()
 	draw_header()
 	draw_instruction()
 	draw_flow()
-	draw_meter()
 	draw_board()
 	draw_incoming()
 	for i in game.tray.size():
@@ -148,18 +153,13 @@ func draw_header() -> void:
 	round_button(Vector2(458, 52), 22)
 	for x in [452, 461]:
 		box(Rect2(x, 43, 5, 18), INK, 2)
-	# Best with a small crown, level pill on the right, big centred score.
+	# Best with a small crown and a big centred score. Difficulty climbs
+	# silently: there is no level display, like Block Blast.
 	draw_crown(Vector2(70, 102))
 	head(str(game.save.best), Vector2(84, 109), 22, ACCENT, 0)
+	draw_best_chase()
 	if game.tutorial > 0:
 		head("LEARN %d/3" % game.tutorial, Vector2(480, 109), 20, MINT, 2)
-	else:
-		var level := SupplySystem.play_level(game.turns)
-		var pill := Rect2(408, 88, 72, 28)
-		box(pill, Color(1, 1, 1, .10), 14, Color(1, 1, 1, .18), 1)
-		head("LV %d" % level, pill.get_center() + Vector2(0, 8), 20, INK, 1)
-		if game.level_flash > 0:
-			box(pill.grow(3 + 6 * game.level_flash), Color.TRANSPARENT, 17, Color(ACCENT, game.level_flash * .6), 2)
 	var shown := int(round(game.shown_score))
 	var size := 64 if shown < 1000000 else 48
 	var bump: float = 1.0 + .12 * clampf((game.score - game.shown_score) / 300.0, 0, 1)
@@ -167,44 +167,63 @@ func draw_header() -> void:
 	if game.streak >= 2 and game.tutorial == 0:
 		var pulse: float = game.streak_pulse
 		var pill := Rect2(200, 168, 140, 28).grow(pulse * 4)
-		box(pill, Color("ff7a3d"), 15, Color("ffd45c"), 2, Color(1, .55, .2, .45 + pulse * .3), int(8 + pulse * 10))
-		head("STREAK ×%d" % ComboManager.streak_multiplier(game.streak), pill.get_center() + Vector2(0, 8), 21, INK, 1, 4, Color(.5, .1, 0, .5))
+		var aimed: Dictionary = game.preview() if not game.busy and game.overlay.is_empty() else {}
+		if not aimed.is_empty() and aimed.get("streak", 0) == 0:
+			# Aiming a punch with no match: show what it would cost.
+			var throb := .5 + .5 * sin(time * 9)
+			box(pill, Color("5a1a2e"), 15, Color(DANGER, .6 + .4 * throb), 2, Color(DANGER, .35 * throb), 10)
+			head("LOSE ×%d" % ComboManager.streak_multiplier(game.streak), pill.get_center() + Vector2(0, 8), 21, Color("ffb3c0"), 1, 4, Color(.3, 0, .1, .5))
+		else:
+			box(pill, Color("ff7a3d"), 15, Color("ffd45c"), 2, Color(1, .55, .2, .45 + pulse * .3), int(8 + pulse * 10))
+			head("STREAK ×%d" % ComboManager.streak_multiplier(game.streak), pill.get_center() + Vector2(0, 8), 21, INK, 1, 4, Color(.5, .1, 0, .5))
+
+# Goal gradient: once a run is within reach of the record, count down to it.
+# After it falls, the crown line simply becomes the new record.
+func draw_best_chase() -> void:
+	var record: int = game.run_best
+	if game.tutorial > 0 or record <= 0:
+		return
+	if game.score > record:
+		head("NEW RECORD", Vector2(60, 131), 15, Color(ACCENT, .75 + .25 * sin(time * 5)), 0)
+	elif game.score >= record * .5:
+		var gap: int = record - game.score
+		var close: float = clampf(float(game.score) / record, 0, 1)
+		var tint := MUTED.lerp(ACCENT, clampf((close - .5) * 2.0, 0, 1))
+		head("%d TO BEAT" % gap, Vector2(60, 131), 15, tint, 0)
+
+# Edges of the screen breathe red with the heartbeat when the stack is
+# within a row of the ceiling. Reduced motion holds a steady tint.
+func draw_peril_vignette() -> void:
+	var peril: int = game.peril
+	if peril < 2 or game.over:
+		return
+	var beat := 1.0 if game.save.reduced_motion else .55 + .45 * absf(sin(time * (5.1 if peril >= 3 else 3.1)))
+	var strength := (.30 if peril >= 3 else .17) * beat
+	var view := Rect2(-game.position, get_viewport_rect().size)
+	var red := Color(DANGER, strength)
+	var clear := Color(DANGER, 0)
+	var depth := 90.0 if peril >= 3 else 60.0
+	gradient(Rect2(view.position, Vector2(view.size.x, depth)), red, clear)
+	gradient(Rect2(Vector2(view.position.x, view.end.y - depth), Vector2(view.size.x, depth)), clear, red)
+	draw_polygon(PackedVector2Array([view.position, view.position + Vector2(depth, 0), Vector2(view.position.x + depth, view.end.y), Vector2(view.position.x, view.end.y)]), PackedColorArray([red, clear, clear, red]))
+	draw_polygon(PackedVector2Array([Vector2(view.end.x - depth, view.position.y), Vector2(view.end.x, view.position.y), view.end, Vector2(view.end.x - depth, view.end.y)]), PackedColorArray([clear, red, red, clear]))
 
 func draw_crown(at: Vector2) -> void:
 	var points := PackedVector2Array([at + Vector2(-9, 6), at + Vector2(-9, -4), at + Vector2(-4, 1), at + Vector2(0, -7), at + Vector2(4, 1), at + Vector2(9, -4), at + Vector2(9, 6)])
 	draw_colored_polygon(points, ACCENT)
 
+# Arcade play has no commentary line: warnings live on the drag outline, the
+# streak badge and the incoming row. Lessons keep their title and hint, drawn
+# where the incoming row sits in arcade play. Rare notices (save failure,
+# undo) still appear briefly above the board.
 func draw_instruction() -> void:
 	if game.tutorial > 0:
-		head(LessonBook.TITLES[game.model.lesson], Vector2(270, 232), 26, INK, 1, 5)
+		head(LessonBook.TITLES[game.model.lesson], Vector2(270, 770), 26, INK, 1, 5)
 		var hint: String = LessonBook.HINTS[game.model.lesson]
-		label(hint, Vector2(270, 254), fit_size(hint, 14, 430, font), MUTED, 1)
+		label(hint, Vector2(270, 796), fit_size(hint, 14, 470, font), MUTED, 1)
 		return
-	var prediction: Dictionary = game.preview()
-	var outcome := ""
-	var tint := MUTED
-	if not prediction.is_empty():
-		if prediction.waves > 1:
-			outcome = "CHAIN ×%d  ·  +%d" % [prediction.waves, prediction.score]
-			tint = ACCENT
-		elif prediction.get("matched", 0) > 0:
-			outcome = "MATCH %d  ·  +%d" % [prediction.matched, prediction.score]
-			tint = MINT
-		else:
-			outcome = "NO MATCH  ·  +%d" % prediction.score
-			tint = INK
-		if prediction.get("streak", 0) >= 2:
-			outcome += "  ·  STREAK ×%d" % ComboManager.streak_multiplier(prediction.streak)
-		if prediction.get("rows_due", 0) > 0:
-			outcome += "  ·  ROW RISES"
-			tint = Color("ffb36b") if prediction.waves == 0 else tint
-	elif game.notice_time > 0:
-		outcome = game.notice
-	elif not game.busy:
-		outcome = "Fit a shape on blocks. Make matches to hold back rows."
-	if outcome.is_empty():
-		return
-	head(outcome, Vector2(270, 226), fit_size(outcome, 22, 430, display_font), tint, 1, 4, Color(0, 0, 0, .3))
+	if game.notice_time > 0 and not game.busy:
+		head(game.notice, Vector2(270, 214), fit_size(game.notice, 18, 470, display_font), INK, 1, 4, Color(0, 0, 0, .3))
 
 func draw_flow() -> void:
 	if game.tutorial == 0:
@@ -217,36 +236,14 @@ func draw_flow() -> void:
 		box(rect, Color(1, 1, 1, .16) if active else Color(1, 1, 1, .05), 13, Color(MINT, .6) if active else Color.TRANSPARENT, 1 if active else 0)
 		head(captions[i], Vector2(rect.get_center().x, 201), 16, INK if active else MUTED, 1)
 
-# Twelve segments are one row. The aimed punch previews its cost as a ghost.
-func draw_meter() -> void:
-	if game.tutorial > 0:
-		return
-	var capacity: int = game.model.meter_capacity()
-	var filled: float = game.meter_shown
-	var prediction: Dictionary = game.preview() if not game.busy and game.overlay.is_empty() else {}
-	var pips: int = prediction.get("pips", -1)
-	head("NEXT ROW", Vector2(60, 251), 15, MUTED, 0)
-	var left := 140.0
-	var width := 340.0
-	var gap := 3.0
-	var segment := (width - gap * (capacity - 1)) / capacity
-	var danger: bool = pips >= 0 and game.model.meter + pips >= capacity
-	for i in capacity:
-		var rect := Rect2(left + i * (segment + gap), 239, segment, 13)
-		box(rect, Color(0, 0, 0, .28), 4)
-		var amount := clampf(filled - i, 0, 1)
-		if amount > 0:
-			var tint := Color("ff9f43").lerp(DANGER, clampf(filled / capacity, 0, 1) * .8)
-			box(Rect2(rect.position, Vector2(rect.size.x * amount, rect.size.y)), tint, 4)
-		elif pips > 0 and i < game.model.meter + pips:
-			var pulse := .45 + .25 * sin(time * 9)
-			box(rect, Color(DANGER if danger else ACCENT, pulse), 4)
-	if pips == 0 and not prediction.is_empty():
-		head("FREE", Vector2(left + width, 235), 14, MINT, 2)
+
 
 func draw_board() -> void:
 	var origin = BOARD_POS + game.screen_board_offset
-	box(Rect2(origin - Vector2(12, 12), Vector2(444, 564)), Color(.06, .04, .2, .55), 22, Color(1, 1, 1, .14), 2, Color(0, 0, 0, .35), 18, Vector2(0, 8))
+	var frame := Color(1, 1, 1, .14)
+	if game.peril >= 2 and not game.over:
+		frame = Color(DANGER, .45 + .4 * absf(sin(time * (5.1 if game.peril >= 3 else 3.1))))
+	box(Rect2(origin - Vector2(12, 12), BOARD_SIZE + Vector2(24, 24)), Color(.06, .04, .2, .55), 22, frame, 2 if game.peril < 2 else 3, Color(0, 0, 0, .35), 18, Vector2(0, 8))
 	var moving = {}
 	for movement in game.movements:
 		moving[movement.to] = true
@@ -259,14 +256,14 @@ func draw_board() -> void:
 	# Matched cells are where blocks will be after the punch has fallen; mark
 	# the board cells whose blocks end up in a match by replaying gravity.
 	var lit := lit_cells(preview_hits, match_cells) if not preview_hits.is_empty() else {}
-	for y in 9:
-		for x in 7:
+	for y in BoardManager.HEIGHT:
+		for x in BoardManager.WIDTH:
 			var p = Vector2i(x, y)
 			var rect = Rect2(origin + Vector2(p) * CELL + Vector2(3, 3), Vector2(54, 54))
 			box(rect, Color(1, 1, 1, .045 if (x + y) % 2 == 0 else .03), 10)
 	var pulse := .5 + .5 * sin(time * 8)
-	for y in 9:
-		for x in 7:
+	for y in BoardManager.HEIGHT:
+		for x in BoardManager.WIDTH:
 			var p = Vector2i(x, y)
 			var rect = Rect2(origin + Vector2(p) * CELL + Vector2(3, 3), Vector2(54, 54))
 			if game.board.at(p) < 0 or moving.has(p):
@@ -296,8 +293,8 @@ func draw_board() -> void:
 				draw_circle(rect.position + Vector2(8, 8), 4, Color.WHITE, true, -1, true)
 	if game.row_rising:
 		var visible_height = clampf(CELL * game.rise_t - 3, 0, 54)
-		for x in 7:
-			block(Rect2(origin + Vector2(x * CELL + 3, 540 - CELL * game.rise_t + 3), Vector2(54, visible_height)), game.rising_colors[x])
+		for x in BoardManager.WIDTH:
+			block(Rect2(origin + Vector2(x * CELL + 3, BOARD_SIZE.y - CELL * game.rise_t + 3), Vector2(54, visible_height)), game.rising_colors[x])
 	for movement in game.movements:
 		var at = origin + Vector2(movement.from).lerp(Vector2(movement.to), game.anim_t) * CELL + Vector2(3, 3)
 		block(Rect2(at, Vector2(54, 54)), movement.color)
@@ -310,7 +307,7 @@ func draw_board() -> void:
 	if game.phase == "match":
 		draw_match_groups(origin)
 	if game.flash > 0:
-		box(Rect2(origin - Vector2(8, 8), Vector2(436, 556)), Color(1, 1, 1, game.flash * .22), 18)
+		box(Rect2(origin - Vector2(8, 8), BOARD_SIZE + Vector2(16, 16)), Color(1, 1, 1, game.flash * .22), 18)
 	draw_danger(origin)
 
 # Map predicted post-fall match cells back to the blocks currently on the
@@ -322,9 +319,9 @@ func lit_cells(hits: Array, match_cells: Dictionary) -> Dictionary:
 	var removed := {}
 	for p in hits:
 		removed[p] = true
-	for x in 7:
-		var target := 8
-		for y in range(8, -1, -1):
+	for x in BoardManager.WIDTH:
+		var target := BoardManager.HEIGHT - 1
+		for y in range(BoardManager.HEIGHT - 1, -1, -1):
 			var p := Vector2i(x, y)
 			if game.board.at(p) < 0 or removed.has(p):
 				continue
@@ -334,17 +331,18 @@ func lit_cells(hits: Array, match_cells: Dictionary) -> Dictionary:
 	return result
 
 func draw_danger(origin: Vector2) -> void:
-	for x in 7:
+	for x in BoardManager.WIDTH:
 		var h = SupplySystem.height(game.board, x)
-		if h >= 7:
-			var tint = DANGER if h >= 8 else Color("ffb36b")
-			var a := .55 + .45 * sin(time * (10 if h >= 8 else 6))
+		if h >= BoardManager.HEIGHT - 2:
+			var top: bool = h >= BoardManager.HEIGHT - 1
+			var tint = DANGER if top else Color("ffb36b")
+			var a := .55 + .45 * sin(time * (10 if top else 6))
 			box(Rect2(origin + Vector2(x * CELL + 4, -8), Vector2(52, 5)), Color(tint, a), 2, Color.TRANSPARENT, 0, Color(tint, .6 * a), 8)
 
 func draw_training_goal(origin: Vector2) -> void:
 	if game.tray[game.selected].is_empty():
 		return
-	var goal: Vector2i = LessonBook.GOALS[game.model.lesson]
+	var goal: Vector2i = LessonBook.goal(game.model.lesson)
 	var a := .6 + .4 * sin(time * 6)
 	for offset in CutterManager.SHAPES[game.tray[game.selected].shape]:
 		var rect := Rect2(origin + Vector2(goal + offset) * CELL + Vector2(1, 1), Vector2(58, 58))
@@ -362,13 +360,20 @@ func draw_match_groups(origin: Vector2) -> void:
 			box(Rect2(center - Vector2(19, 19), Vector2(38, 38)), Color(0, 0, 0, .5), 19, Color.WHITE, 2)
 			head(str(group.size()), center + Vector2(0, 10), 28, Color.WHITE, 1)
 
+# The incoming row IS the row meter: its blocks light up left to right as
+# punches fill it, and fully lit it pushes into the board. It shows only the
+# current fill. It never previews the aimed punch or predicts a loss; the
+# player has to read that from the board.
 func draw_incoming() -> void:
 	if game.tutorial > 0:
 		return
-	box(Rect2(50, 824, 440, 24), Color(0, 0, 0, .25), 8, Color(1, 1, 1, .08), 1)
-	for x in 7:
-		block(Rect2(Vector2(BOARD_POS.x + x * CELL + 14, 828), Vector2(32, 16)), game.incoming[x], true, .85)
-	head("↑", Vector2(503, 843), 22, MUTED, 1)
+	var filled: float = clampf(game.meter_shown / game.model.meter_capacity(), 0, 1)
+	var left := BOARD_POS.x
+	box(Rect2(left - 8, 744, BOARD_SIZE.x + 16, 44), Color(0, 0, 0, .30), 12, Color(1, 1, 1, .10), 1)
+	for x in BoardManager.WIDTH:
+		var lit := clampf(filled * BoardManager.WIDTH - x, 0, 1)
+		block(Rect2(Vector2(left + x * CELL + 5, 751), Vector2(CELL - 10, 30)), game.incoming[x], true, .28 + .72 * lit)
+	head("NEXT ROW", Vector2(270, 812), 16, MUTED, 1)
 
 func draw_cutter(i: int) -> void:
 	var cutter: Dictionary = game.tray[i]
@@ -387,11 +392,11 @@ func draw_cutter(i: int) -> void:
 	for cell in shape:
 		bounds = bounds.max(Vector2(cell) + Vector2.ONE)
 	var tile_size := 28.0
-	var start := rect.position + Vector2((rect.size.x - bounds.x * tile_size) / 2, 12 + (82 - bounds.y * tile_size) / 2)
+	# No name label: the shape alone sits centred in its card.
+	var start := rect.position + (rect.size - bounds * tile_size) / 2
 	var alpha := .35 if dragging_this else 1.0
 	for cell in shape:
 		gold_tile(Rect2(start + Vector2(cell) * tile_size, Vector2(tile_size - 2, tile_size - 2)), active, alpha)
-	head(CutterManager.NAMES[cutter.shape], Vector2(rect.get_center().x, rect.end.y - 12), 17, INK if active else MUTED, 1)
 
 func gold_tile(rect: Rect2, bright: bool, alpha: float = 1.0) -> void:
 	var base := Color("ffd45c") if bright else Color("cfc6ff")
@@ -400,16 +405,14 @@ func gold_tile(rect: Rect2, bright: bool, alpha: float = 1.0) -> void:
 	box(Rect2(rect.position + Vector2(1.5, 1), rect.size - Vector2(3, 4)), Color(base, alpha), 5)
 	box(Rect2(rect.position + Vector2(3, 2), Vector2(rect.size.x - 6, rect.size.y * .38)), Color(1, 1, 1, .35 * alpha), 3)
 
+# Arcade play keeps the footer empty: no undo button and no hint text.
 func draw_footer() -> void:
-	var lessons: bool = game.tutorial > 0
-	var can_undo: bool = not game.busy and not game.undo_state.is_empty()
+	if game.tutorial == 0:
+		return
 	var rect := Rect2(60, 1014, 132, 44)
-	box(rect, Color(1, 1, 1, .10 if can_undo or lessons else .04), 22, Color(1, 1, 1, .16), 1)
-	head("SKIP LESSONS" if lessons else "↶ UNDO", rect.get_center() + Vector2(0, 7), 18, INK if can_undo or lessons else Color(MUTED, .5), 1)
-	if lessons:
-		label("Lessons have no rows. Take your time.", Vector2(480, 1041), 12, MUTED, 2)
-	else:
-		label("Matches slow the rows · chains are free", Vector2(480, 1041), 12, MUTED, 2)
+	box(rect, Color(1, 1, 1, .10), 22, Color(1, 1, 1, .16), 1)
+	head("SKIP LESSONS", rect.get_center() + Vector2(0, 7), 18, INK, 1)
+	label("Lessons have no rows. Take your time.", Vector2(480, 1041), 12, MUTED, 2)
 
 func draw_praise() -> void:
 	if game.praise_time <= 0 or not game.overlay.is_empty():
@@ -426,6 +429,14 @@ func draw_praise() -> void:
 func ease_out_back(t: float) -> float:
 	var c := 1.70158
 	return 1 + (c + 1) * pow(t - 1, 3) + c * pow(t - 1, 2)
+
+# Bright neon pill for the game-over undo. TODO(ads): this becomes a
+# rewarded-ad "second chance"; keep its rect in sync with GameManager.
+func neon_button(rect: Rect2, value: String) -> void:
+	var pulse := .5 + .5 * sin(time * 4)
+	box(rect, NEON, int(rect.size.y / 2), Color("d6ffc9"), 2, Color(NEON, .45 + .3 * pulse), int(12 + 8 * pulse))
+	box(Rect2(rect.position + Vector2(8, 3), Vector2(rect.size.x - 16, rect.size.y * .40)), Color(1, 1, 1, .35), int(rect.size.y / 3))
+	head(value, rect.get_center() + Vector2(0, 9), 25, Color("0b3d00"), 1)
 
 func button(rect: Rect2, value: String, primary: bool = false) -> void:
 	if primary:
@@ -458,7 +469,14 @@ func draw_overlay() -> void:
 		"over":
 			var best: bool = game.score > game.run_best
 			head("NEW BEST!" if best else "GAME OVER", Vector2(270, 350), 44, ACCENT if best else INK, 1, 7)
-			label("The stack reached the top.", Vector2(270, 380), 14, MUTED, 1)
+			var gap: int = game.run_best - game.score
+			var tagline := "The stack reached the top."
+			if best and game.run_best > 0:
+				tagline = "+%d over your old best." % (game.score - game.run_best)
+			elif game.run_best > 0 and gap <= maxi(150, int(game.run_best * .12)):
+				# Near-miss framing: a small gap is the strongest "one more go" prompt.
+				tagline = "SO CLOSE! Only %d short of your best." % gap
+			label(tagline, Vector2(270, 380), 14, ACCENT if best or tagline.begins_with("SO CLOSE") else MUTED, 1)
 			head(str(game.score), Vector2(270, 470), 80, INK, 1, 8)
 			if not best and game.run_best > 0:
 				var share := clampf(float(game.score) / game.run_best, 0, 1)
@@ -468,10 +486,10 @@ func draw_overlay() -> void:
 				label("%d%% of your best (%d)" % [int(share * 100), game.run_best], Vector2(270, 526), 13, MUTED, 1)
 			else:
 				label("POINTS", Vector2(270, 506), 12, MUTED, 1)
-			var stats := "LEVEL %d   ·   %d PUNCHES   ·   CHAIN ×%d   ·   STREAK ×%d" % [SupplySystem.play_level(game.turns), game.turns, game.best_combo, game.model.best_streak]
+			var stats := "%d PUNCHES   ·   BEST CHAIN ×%d   ·   BEST STREAK ×%d" % [game.turns, game.best_combo, game.model.best_streak]
 			label(stats, Vector2(270, 570), fit_size(stats, 13, 380, font), INK, 1)
 			if not game.undo_state.is_empty():
-				button(Rect2(95, 625, 350, 50), "UNDO LAST MOVE")
+				neon_button(Rect2(95, 625, 350, 50), "↶ UNDO LAST MOVE")
 			button(game.replay_rect, "PLAY AGAIN", true)
 			button(Rect2(95, 775, 350, 50), "MAIN MENU")
 		"settings":
@@ -502,7 +520,6 @@ func draw_home() -> void:
 		var tile: Vector3 = tiles[i]
 		var hop := maxf(0, sin(time * 3.0 - i * .6)) * 8
 		block(Rect2(112 + tile.x * 64, 322 + tile.y * 54 - hop, 57, 57), int(tile.z))
-	label("Fit shapes on blocks. Match colours. Chain big.", Vector2(270, 505), 15, MUTED, 1)
 	if game.save.best > 0:
 		box(Rect2(160, 520, 220, 36), Color(1, 1, 1, .1), 18)
 		draw_crown(Vector2(190, 537))
@@ -552,6 +569,6 @@ func draw_help() -> void:
 	label("clear. More falls = chains.", Vector2(180, 566), 12, MUTED)
 	box(Rect2(95, 596, 350, 90), Color(1, 1, 1, .07), 16)
 	head("3  HOLD BACK THE ROWS", Vector2(111, 626), 22, Color("ff9f43"))
-	label("Each punch fills the NEXT ROW meter.", Vector2(111, 650), 12)
-	label("Matches fill it less. Early chains are free.", Vector2(111, 672), 12, MUTED)
+	label("The row under the board lights up as you punch.", Vector2(111, 650), 12)
+	label("Fully lit, it pushes in. Matches light it less; chains least.", Vector2(111, 672), 12, MUTED)
 	button(game.replay_rect, "GOT IT", true)

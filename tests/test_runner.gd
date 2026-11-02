@@ -152,7 +152,7 @@ func test_shape_punches_and_breathing() -> void:
 		var training := RoundModel.new()
 		training.reset(710, lesson_index)
 		var unchanged := training.snapshot()
-		var wrong: Vector2i = CutterManager.placements(training.board, training.tray[0]).filter(func(p: Vector2i) -> bool: return p != LessonBook.GOALS[lesson_index])[0]
+		var wrong: Vector2i = CutterManager.placements(training.board, training.tray[0]).filter(func(p: Vector2i) -> bool: return p != LessonBook.goal(lesson_index))[0]
 		check(training.forecast(0, wrong).is_empty() and training.play(0, wrong).is_empty(), "Training rejects valid punches outside its authored teaching goal")
 		check(training.snapshot() == unchanged and not training.lesson_complete, "A wrong training punch never mutates or completes the lesson")
 	var board := BoardManager.new()
@@ -179,9 +179,9 @@ func test_shape_punches_and_breathing() -> void:
 	model.reset(700, 1)
 	model.lesson = -1
 	model.advance_clock(4.0)
-	prediction = model.forecast(0, LessonBook.GOALS[1])
+	prediction = model.forecast(0, LessonBook.goal(1))
 	check(prediction.waves == 1 and prediction.time_bonus == 0.0, "An ordinary one-wave match buys board space without granting extra thinking time")
-	events = model.play(0, LessonBook.GOALS[1])
+	events = model.play(0, LessonBook.goal(1))
 	check(TurnSummary.from_events(events).time_bonus == 0.0 and is_equal_approx(model.rise_remaining, 8.0 - prediction.effort), "Ordinary matches pay effort and grant no chain credit")
 	model.reset(701)
 	var legacy := model.snapshot()
@@ -295,7 +295,7 @@ func test_home_and_drag() -> void:
 	game.pressure_enabled = false
 	check(game.overlay.is_empty() and game.model.lesson == 0, "Home training opens the first untimed lesson")
 	var before: Dictionary = game.model.snapshot()
-	var origin := Vector2i(2, 8)
+	var origin := LessonBook.goal(0)
 	# The preview is lifted above the finger. Stay above the tray; nearby
 	# snapping keeps the bottom row reachable.
 	var pointer: Vector2 = game.BOARD_POS + (Vector2(origin) + Vector2(1.5, .5)) * game.CELL + Vector2(0, 70)
@@ -386,7 +386,7 @@ func test_game_flow() -> void:
 	for index in 3:
 		check(game.model.lesson == index and game.tutorial == index + 1, "Authored lesson starts at the right step")
 		check(RoundModel.valid(game.model.snapshot()), "Lesson checkpoint is valid and settled")
-		var target: Vector2i = [Vector2i(2, 8), Vector2i(0, 7), Vector2i(0, 5)][index]
+		var target: Vector2i = LessonBook.goal(index)
 		game.precise = true
 		game.press(game.cell_center(target))
 		check(not game.busy and game.turns == 0, "Press previews without committing")
@@ -405,7 +405,7 @@ func test_game_flow() -> void:
 	game.model.tray = CutterManager.diverse_refresh(game.model.board, [{"shape": 0, "color": -1}, {}, {}], game.model.rng)
 	game.sync_model()
 	game.checkpoint()
-	var target := Vector2i(0, 5)
+	var target := LessonBook.goal(2)
 	game.precise = true
 	var before: Dictionary = game.model.snapshot()
 	var prediction: Dictionary = game.model.forecast(game.selected, target)
@@ -917,18 +917,18 @@ func test_punch_effort() -> void:
 	var model := RoundModel.new()
 	model.reset(700, 1)
 	var training := model.snapshot()
-	var forecast := model.forecast(0, LessonBook.GOALS[1])
+	var forecast := model.forecast(0, LessonBook.goal(1))
 	check(forecast.effort == 0 and forecast.clock_delta == 0, "Training forecasts charge no punch effort")
-	model.play(0, LessonBook.GOALS[1])
+	model.play(0, LessonBook.goal(1))
 	check(model.effort_seconds == 0 and model.rise_remaining == training.rise_remaining, "Training cuts preserve the full clock")
 	model.reset(700, 1)
 	model.lesson = -1
 	model.turns = 200
 	model.rise_period = 4.0
 	model.rise_remaining = .1
-	forecast = model.forecast(0, LessonBook.GOALS[1])
+	forecast = model.forecast(0, LessonBook.goal(1))
 	var before := model.snapshot()
-	var events := model.play(0, LessonBook.GOALS[1])
+	var events := model.play(0, LessonBook.goal(1))
 	check(not events.is_empty() and model.turns == 201, "A last-moment legal cut resolves before its owed rise")
 	check(is_equal_approx(model.effort_seconds, forecast.effort), "Successful cuts record the complete forecast punch cost")
 	check(model.rise_remaining == 0 and is_equal_approx(model.pending_effort, forecast.effort - forecast.time_bonus - .1), "Punch overshoot is retained as owed clock debt")
@@ -1005,9 +1005,9 @@ func test_live_effort_debt() -> void:
 	game.model.rise_period = 4.0
 	game.model.rise_remaining = .1
 	game.sync_model()
-	var predicted: Dictionary = game.model.forecast(0, LessonBook.GOALS[1])
+	var predicted: Dictionary = game.model.forecast(0, LessonBook.goal(1))
 	check(predicted.rows_due == 2, "A late shallow punch truthfully previews two owed rises")
-	await game.place_cutter(LessonBook.GOALS[1])
+	await game.place_cutter(LessonBook.goal(1))
 	check(game.model.rise_remaining == 0 and game.model.pending_effort > 4, "Live cut keeps both owed rises after its animation")
 	var disk := SaveStore.new(path)
 	disk.load_data()

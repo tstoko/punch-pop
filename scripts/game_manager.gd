@@ -83,13 +83,17 @@ var praise_tint := Color.WHITE
 var streak := 0
 var streak_pulse := 0.0
 var meter_shown := 0.0
-var level_flash := 0.0
 var flash := 0.0
+# Peril is how close the stack is to the ceiling: 0 safe, 1 (7 high) wary,
+# 2 (8 high) one row from the top, 3 (top row filled) the next row ends it.
+var peril := 0
+var heartbeat_time := 0.0
+var brink := false
 const PRAISE := ["", "GOOD!", "GREAT!", "EXCELLENT!", "AMAZING!", "UNBELIEVABLE!"]
 
 func _ready() -> void:
 	save.load_data()
-	run_best = save.best
+	run_best = save.run_start_best if not save.round_data.is_empty() else save.best
 	ui = UIManager.new()
 	ui.game = self
 	add_child(ui)
@@ -137,6 +141,7 @@ func cancel_gesture() -> void:
 func start_game(force_tutorial: bool = false) -> void:
 	round_available = true
 	run_best = save.best
+	save.run_start_best = run_best
 	reset_transients()
 	model.reset(-1, 0 if force_tutorial else -1)
 	undo_state = {}
@@ -177,6 +182,8 @@ func reset_transients() -> void:
 	notice_time = 0
 	praise_time = 0
 	flash = 0
+	brink = false
+	heartbeat_time = 0
 	if is_instance_valid(effects):
 		effects.particles.clear()
 		effects.rings.clear()
@@ -192,6 +199,7 @@ func sync_model() -> void:
 	streak = model.streak
 	over = model.over
 	tutorial = model.lesson + 1
+	peril = 0 if tutorial > 0 else clampi(SupplySystem.tallest(board) - (BoardManager.HEIGHT - 3), 0, 3)
 	tray_insights.clear()
 	for slot in tray.size():
 		var best := 0
@@ -232,8 +240,8 @@ func _process(delta: float) -> void:
 	floaters = floaters.filter(func(f: Dictionary) -> bool: return f.life > 0)
 	praise_time = maxf(0, praise_time - delta)
 	streak_pulse = maxf(0, streak_pulse - delta * 2.5)
-	level_flash = maxf(0, level_flash - delta)
 	flash = maxf(0, flash - delta * 3.0)
+	tick_heartbeat(delta)
 	shown_score = move_toward(shown_score, score, maxf(12.0, absf(score - shown_score) * 9.0) * delta)
 	meter_shown = lerpf(meter_shown, float(model.meter), minf(1.0, delta * 10.0))
 	effects.visible = overlay.is_empty()
@@ -311,11 +319,8 @@ func press(p: Vector2) -> void:
 	if Rect2(376, 26, 52, 60).has_point(p):
 		overlay = "help"
 		return
-	if Rect2(60, 1014, 132, 44).has_point(p):
-		if tutorial > 0:
-			finish_tutorial()
-		else:
-			undo_move()
+	if tutorial > 0 and Rect2(60, 1014, 132, 44).has_point(p):
+		finish_tutorial()
 		return
 	for i in tray.size():
 		if not tray[i].is_empty() and Rect2(60 + i * 144, 862, 132, 136).has_point(p):
@@ -327,7 +332,7 @@ func press(p: Vector2) -> void:
 			drag_start_pos = p
 			drag_origin = Vector2i(-99, -99)
 			return
-	if Rect2(BOARD_POS, Vector2(420, 540)).has_point(p):
+	if Rect2(BOARD_POS, UIManager.BOARD_SIZE).has_point(p):
 		dragging = true
 		hover = cell_at(p)
 
@@ -344,7 +349,7 @@ func select_cutter(index: int) -> void:
 	if tutorial > 0 and not model.lesson_complete and index >= 0 and index < tray.size() and not tray[index].is_empty():
 		# An authored lesson teaches a specific outcome, never a false success
 		# from another legal punch. Endless placement remains unrestricted.
-		var goal: Vector2i = LessonBook.GOALS[model.lesson]
+		var goal: Vector2i = LessonBook.goal(model.lesson)
 		aim_targets = {goal: true}
 		targets.clear()
 		for point in CutterManager.hits(board, tray[index], goal):
@@ -383,14 +388,14 @@ func move_pointer(p: Vector2) -> void:
 # Ease the lift near the lower edge so the bottom row remains easy to reach
 # without dragging back into the tray (which always cancels).
 func card_drag_center(p: Vector2) -> Vector2:
-	var lower_edge := clampf((p.y - (BOARD_POS.y + 420.0)) / 160.0, 0.0, 1.0)
+	var lower_edge := clampf((p.y - (BOARD_POS.y + UIManager.BOARD_SIZE.y - 120.0)) / 160.0, 0.0, 1.0)
 	return p - Vector2(0, lerpf(100.0, 40.0, lower_edge))
 
 func card_drag_origin(p: Vector2) -> Vector2i:
 	if selected < 0 or selected >= tray.size() or tray[selected].is_empty():
 		return Vector2i(-99, -99)
 	# Leaving the board horizontally or dragging back to the cards cancels.
-	if not Rect2(BOARD_POS - Vector2(18, 0), Vector2(456, 586)).has_point(p):
+	if not Rect2(BOARD_POS - Vector2(18, 0), UIManager.BOARD_SIZE + Vector2(36, 46)).has_point(p):
 		return Vector2i(-99, -99)
 	var extent := Vector2.ZERO
 	for offset in CutterManager.SHAPES[tray[selected].shape]:
@@ -412,15 +417,24 @@ func release(p: Vector2) -> void:
 	if dragging and not busy and not over and overlay.is_empty():
 		move_pointer(p)
 		var origin := preview_origin()
-		var allowed := (drag_from_card and drag_active) or (not drag_from_card and Rect2(BOARD_POS, Vector2(420, 540)).has_point(p))
+		var allowed := (drag_from_card and drag_active) or (not drag_from_card and Rect2(BOARD_POS, UIManager.BOARD_SIZE).has_point(p))
 		if allowed and selected >= 0 and selected < tray.size():
 			if not CutterManager.legal_hits(board, tray[selected], origin).is_empty():
 				place_cutter(origin)
-			elif drag_from_card:
-				message("The whole shape must sit on blocks.")
-			else:
+			elif tutorial > 0:
 				message("Every square of the shape needs a block under it.")
 	cancel_gesture()
+
+# A heartbeat while the stack is within a row of the ceiling, racing once the
+# next row would end the run. It stops the moment the player escapes.
+func tick_heartbeat(delta: float) -> void:
+	if peril < 2 or over or busy or not overlay.is_empty():
+		heartbeat_time = 0.0
+		return
+	heartbeat_time -= delta
+	if heartbeat_time <= 0:
+		effects.sound("heartbeat", peril - 2)
+		heartbeat_time = .62 if peril >= 3 else 1.0
 
 # v0.9 is turn-based: decision time never raises rows. Retained so legacy
 # harnesses can still drive an old clock explicitly.
@@ -442,11 +456,9 @@ func rise_from_timer() -> void:
 	undo_state = {}
 	checkpoint()
 	var before := model.snapshot()
-	var old_level := SupplySystem.play_level(turns)
-	var old_best := save.best
 	var events := model.expire_clock()
 	if not events.is_empty():
-		await present_events(events, before, old_level, old_best)
+		await present_events(events, before)
 
 func place_cutter(origin: Vector2i) -> void:
 	if busy or over or model.lesson_complete:
@@ -454,15 +466,13 @@ func place_cutter(origin: Vector2i) -> void:
 	var before := model.snapshot()
 	# Preserve both the completed board and its current clock during animation.
 	checkpoint()
-	var old_level := SupplySystem.play_level(turns)
-	var old_best := save.best
 	var events := model.play(selected, origin)
 	if events.is_empty():
 		return
 	undo_state = before if tutorial == 0 else {}
-	await present_events(events, before, old_level, old_best)
+	await present_events(events, before)
 
-func present_events(events: Array, before: Dictionary, old_level: int, old_best: int) -> void:
+func present_events(events: Array, before: Dictionary) -> void:
 	busy = true
 	cancel_gesture()
 	combo = 0
@@ -544,13 +554,16 @@ func present_events(events: Array, before: Dictionary, old_level: int, old_best:
 				rising_colors.clear()
 				incoming = event.next.duplicate()
 			"streak":
+				var lost := streak
 				streak = event.streak
+				if event.streak == 0 and lost >= 2 and model.lesson < 0:
+					# Loss aversion: make it sting so the next streak feels worth guarding.
+					add_floater("STREAK ×%d LOST" % ComboManager.streak_multiplier(lost), Vector2(270, 250), UIManager.DANGER)
+					effects.sound("lost")
 				if event.streak >= 2:
 					streak_pulse = 1.0
 					add_floater("STREAK ×%d  +%d" % [event.multiplier, event.earned], Vector2(270, 250), Color("ffd45c"))
 					effects.sound("streak", mini(event.streak, 7))
-				elif event.streak == 0 and model.lesson < 0:
-					pass
 			"meter":
 				if event.meter >= event.capacity:
 					set_phase("supply", "ROW INCOMING", "Plain punches fill the meter fastest. Matches slow it.")
@@ -561,6 +574,16 @@ func present_events(events: Array, before: Dictionary, old_level: int, old_best:
 	announce(last_summary, events)
 	last_clear_time = 1.4 if last_summary.matched > 0 else 0.0
 	sync_model()
+	# Relief is the payoff for tension: reward climbing back from the brink.
+	if peril >= 2:
+		brink = true
+	elif brink and peril == 0 and not over:
+		brink = false
+		praise = "CLOSE CALL!"
+		praise_time = 1.4
+		praise_tint = UIManager.MINT
+		flash = maxf(flash, .6)
+		effects.sound("praise", 4)
 	busy = false
 	set_phase("idle", "", "")
 	if model.lesson_complete:
@@ -568,14 +591,12 @@ func present_events(events: Array, before: Dictionary, old_level: int, old_best:
 	elif over:
 		notice = "The rising board crossed the ceiling."
 		overlay = "over"
-	elif old_best > 0 and score > old_best and before.score <= old_best:
+	elif tutorial == 0 and run_best > 0 and score > run_best and int(before.score) <= run_best:
+		# run_best is the record from before this run, so this fires exactly
+		# once: on the punch that first crosses it. The game-over card repeats it.
 		celebrate("NEW BEST!")
 	elif tutorial == 0 and score >= target_after(int(before.score)):
 		celebrate("%s POINTS!" % target_after(int(before.score)))
-	elif tutorial == 0 and SupplySystem.play_level(turns) > old_level:
-		level_flash = 1.6
-		effects.sound("level", 0)
-		message("Level %d · plain punches now fill %d/12 of the meter" % [SupplySystem.play_level(turns), SupplySystem.meter_cost(0, turns)])
 	if pause_after_move and overlay.is_empty():
 		overlay = "pause"
 	pause_after_move = false
@@ -654,7 +675,6 @@ func finish_tutorial() -> void:
 	save.tutorial_done = true
 	save.save_data()
 	start_game()
-	message("Fit shapes on blocks. Match 4. Chain for time.", 3)
 
 # Targets are presentation only: undo and resumed rounds derive them from score.
 func target_after(value: int) -> int:

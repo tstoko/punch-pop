@@ -1,8 +1,10 @@
 class_name BoardManager
 extends RefCounted
 
-const WIDTH := 7
-const HEIGHT := 9
+# Static so the balance lab can trial other board sizes. The live game and
+# its drawing derive geometry from these (8 × 8 since the tension pass).
+static var WIDTH := 8
+static var HEIGHT := 8
 const EMPTY := -1
 var cells: Array = []
 

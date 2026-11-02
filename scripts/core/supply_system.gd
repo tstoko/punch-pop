@@ -10,9 +10,15 @@ const LEVEL_PUNCHES := 8
 const METER_CAPACITY := 12
 const PLAIN_COST := [8, 9, 11, 12, 13, 14, 16, 17, 18, 20, 22, 24]
 const MATCH_SHARE := .67
+# Plain-cost growth per level once the table above runs out.
+const LATE_GROWTH := 3
 const CHAIN_FREE_UNTIL := 5
 # Incoming rows are searched for punch-and-match setups less often each level.
 const MIN_GENEROSITY := .25
+# Mercy: once any column is within this many rows of the ceiling, every
+# incoming row is searched for an escape setup. Pressure squeezes the board;
+# skill (not luck) gets you out.
+const MERCY_GAP := 2
 
 # --- Legacy pressure clock (checkpoint versions 3-5) ----------------------
 # Retained so older saves validate and their clock fields remain readable.
@@ -37,6 +43,10 @@ static func meter_cost(waves: int, turns: int = 0) -> int:
 	var table: Array = knob("plain", PLAIN_COST)
 	var level := play_level(turns)
 	var plain: int = table[mini(table.size(), level) - 1]
+	# No plateau: beyond the table, every level keeps tightening the screw so
+	# a strong player is always eventually pushed to the edge.
+	if level > table.size():
+		plain += int(knob("late_growth", LATE_GROWTH)) * (level - table.size())
 	if waves <= 0:
 		return plain
 	if waves == 1:
@@ -48,6 +58,18 @@ static func generosity(turns: int, _active_seconds: float = 0.0) -> float:
 		var table: Array = tuning.generosity
 		return float(table[mini(table.size(), play_level(turns)) - 1])
 	return maxf(MIN_GENEROSITY, 1.0 - .06 * (play_level(turns) - 1))
+
+static func tallest(board: BoardManager) -> int:
+	var result := 0
+	for x in BoardManager.WIDTH:
+		result = maxi(result, height(board, x))
+	return result
+
+# Generosity for the row about to be previewed, given the board it will meet.
+static func row_generosity(board: BoardManager, turns: int, active_seconds: float = 0.0) -> float:
+	if tallest(board) >= int(knob("mercy_height", BoardManager.HEIGHT - MERCY_GAP)):
+		return 1.0
+	return generosity(turns, active_seconds)
 
 # Legacy clock helpers. The live game no longer advances the clock.
 static func wave(turns: int) -> int:

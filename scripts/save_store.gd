@@ -3,6 +3,9 @@ extends RefCounted
 
 var path: String
 var best := 0
+# The record as it stood when the current run began, so a resumed run still
+# knows whether it has beaten it (best itself rises with every checkpoint).
+var run_start_best := 0
 var tutorial_done := false
 var sound := true
 var haptics := false
@@ -29,6 +32,8 @@ func load_data() -> void:
 	explain_clears = config.get_value("settings", "explain_clears", false) == true
 	var round_value = config.get_value("round", "checkpoint", {})
 	var undo_value = config.get_value("round", "undo", {})
+	var start_best = config.get_value("round", "start_best", best)
+	run_start_best = clampi(start_best, 0, best) if start_best is int else best
 	round_data = round_value if round_value is Dictionary and RoundModel.valid(round_value) else {}
 	undo_data = undo_value if undo_value is Dictionary and RoundModel.valid(undo_value) else {}
 
@@ -44,6 +49,7 @@ func save_data() -> bool:
 	config.set_value("settings", "explain_clears", explain_clears)
 	config.set_value("round", "checkpoint", round_data)
 	config.set_value("round", "undo", undo_data)
+	config.set_value("round", "start_best", run_start_best)
 	var error := config.save(path + ".tmp")
 	if error == OK:
 		error = DirAccess.rename_absolute(ProjectSettings.globalize_path(path + ".tmp"), ProjectSettings.globalize_path(path))

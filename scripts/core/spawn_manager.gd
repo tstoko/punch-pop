@@ -29,7 +29,7 @@ static func row(rng: RandomNumberGenerator, turns: int) -> Array:
 static func seed_board(board: BoardManager, rng: RandomNumberGenerator) -> void:
 	board.clear()
 	# Bottom five rows, with horizontal pairs but no pre-existing matches.
-	for y in range(4, BoardManager.HEIGHT):
+	for y in range(BoardManager.HEIGHT - int(SupplySystem.knob("seed_rows", BoardManager.HEIGHT - 4)), BoardManager.HEIGHT):
 		for x in BoardManager.WIDTH:
 			var color := rng.randi_range(0, 3)
 			for attempt in 4:
@@ -39,8 +39,8 @@ static func seed_board(board: BoardManager, rng: RandomNumberGenerator) -> void:
 				color = (color + 1) % 4
 			board.put(Vector2i(x, y), color)
 	# A reliable first move, also used by the tutorial.
-	board.put(Vector2i(2, 8), 0)
-	board.put(Vector2i(3, 8), 0)
+	board.put(Vector2i(2, BoardManager.HEIGHT - 1), 0)
+	board.put(Vector2i(3, BoardManager.HEIGHT - 1), 0)
 	ComboManager.resolve(board)
 	if CutterManager.candidates(board).is_empty():
 		board.put(Vector2i(2, 8), 0)
@@ -80,8 +80,8 @@ static func pressure_row(board: BoardManager, rng: RandomNumberGenerator, genero
 		if row_has_cascade(trial):
 			return colors.duplicate()
 		var links := 0
-		for x in 7:
-			if trial.at(Vector2i(x, 7)) == colors[x]:
+		for x in BoardManager.WIDTH:
+			if trial.at(Vector2i(x, BoardManager.HEIGHT - 2)) == colors[x]:
 				links += 2
 			if x > 0 and colors[x] == colors[x - 1]:
 				links += 1
@@ -95,13 +95,13 @@ static func pressure_row(board: BoardManager, rng: RandomNumberGenerator, genero
 	# Guaranteed fallback: pairs, no vertical attachment and no run of four.
 	colors.clear()
 	for color in 4:
-		if color != board.at(Vector2i(0, 8)) and color != board.at(Vector2i(1, 8)):
+		if color != board.at(Vector2i(0, BoardManager.HEIGHT - 1)) and color != board.at(Vector2i(1, BoardManager.HEIGHT - 1)):
 			colors.append_array([color, color])
 			break
-	for x in range(2, 7):
+	for x in range(2, BoardManager.WIDTH):
 		var choices: Array = []
 		for color in 4:
-			if color == board.at(Vector2i(x, 8)):
+			if color == board.at(Vector2i(x, BoardManager.HEIGHT - 1)):
 				continue
 			if colors[x - 1] == color and colors[x - 2] == color:
 				continue
@@ -112,14 +112,14 @@ static func pressure_row(board: BoardManager, rng: RandomNumberGenerator, genero
 static func clustered_row(rng: RandomNumberGenerator) -> Array:
 	var result: Array = []
 	if rng.randf() < .2:
-		for x in 7:
+		for x in BoardManager.WIDTH:
 			result.append(rng.randi_range(0, 3))
 		return result
-	while result.size() < 7:
+	while result.size() < BoardManager.WIDTH:
 		var color := rng.randi_range(0, 3)
 		if not result.is_empty() and color == result.back():
 			color = (color + rng.randi_range(1, 3)) % 4
-		var length := mini(7 - result.size(), rng.randi_range(2, 3))
+		var length := mini(BoardManager.WIDTH - result.size(), rng.randi_range(2, 3))
 		for cell in length:
 			result.append(color)
 	return result
@@ -128,16 +128,16 @@ static func clustered_row(rng: RandomNumberGenerator) -> Array:
 # that small region rather than forecasting every placement on a tall board.
 static func row_has_cascade(board: BoardManager) -> bool:
 	var upper_blocks := false
-	for x in 7:
-		if board.at(Vector2i(x, 7)) >= 0:
+	for x in BoardManager.WIDTH:
+		if board.at(Vector2i(x, BoardManager.HEIGHT - 2)) >= 0:
 			upper_blocks = true
 			break
 	if not upper_blocks:
 		return false
 	for shape in CutterManager.shape_count:
 		var cutter := {"shape": shape, "color": -1}
-		for y in range(6, 9):
-			for x in 7:
+		for y in range(BoardManager.HEIGHT - 3, BoardManager.HEIGHT):
+			for x in BoardManager.WIDTH:
 				var origin := Vector2i(x, y)
 				var hits := CutterManager.legal_hits(board, cutter, origin)
 				if hits.is_empty():

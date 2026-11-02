@@ -37,6 +37,9 @@ if [[ "${1:-}" == "--real-clock" ]]; then
 elif [[ "${1:-}" == "--flow" ]]; then
   TEST_SCRIPT=res://tests/v7_flow.gd
   TEST_SUCCESS='Punch Pop flow: [0-9]+ checks, 0 failures'
+elif [[ "${1:-}" == "--stress" ]]; then
+  TEST_SCRIPT=res://tests/stress_flow.gd
+  TEST_SUCCESS='Punch Pop stress: [0-9]+ checks, 0 failures'
 elif [[ "${1:-}" == "--audit" ]]; then
   TEST_SCRIPT=res://tools/pressure_audit.gd
   TEST_SUCCESS='Saved docs/[^/]+\.json'
@@ -44,7 +47,7 @@ elif [[ "${1:-}" == "--lab" ]]; then
   TEST_SCRIPT=res://tools/curve_lab.gd
   TEST_SUCCESS='Lab complete'
 elif [[ -n "${1:-}" ]]; then
-  echo 'Usage: tools/test.sh [--real-clock|--flow|--audit|--lab]' >&2
+  echo 'Usage: tools/test.sh [--real-clock|--flow|--stress|--audit|--lab]' >&2
   exit 2
 fi
 if [[ $# -gt 0 ]]; then

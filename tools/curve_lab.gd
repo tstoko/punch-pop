@@ -25,6 +25,22 @@ func _initialize() -> void:
 
 func define_presets() -> void:
 	presets.v10 = {"full": true, "pillar": true, "tuning": {}}
+	# v0.10 stress candidates: more pressure, with mercy rows near the ceiling.
+	presets.base_nomercy = {"full": true, "pillar": true, "tuning": {"mercy_height": 99}}
+	presets.s1 = {"full": true, "pillar": true, "tuning": {"plain": [10, 11, 12, 13, 14, 15, 16, 17, 18, 20, 22, 24]}}
+	presets.s2 = {"full": true, "pillar": true, "tuning": {"plain": [10, 11, 12, 13, 14, 15, 16, 17, 18, 20, 22, 24], "match_share": .6}}
+	presets.s3 = {"full": true, "pillar": true, "tuning": {"plain": [11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 22, 24], "match_share": .55}}
+	presets.m6 = {"full": true, "pillar": true, "tuning": {"level_punches": 6}}
+	presets.m7 = {"full": true, "pillar": true, "tuning": {"level_punches": 7}}
+	presets.m8_6 = {"full": true, "pillar": true, "tuning": {"level_punches": 6, "mercy_height": 8}}
+	presets.m8_7 = {"full": true, "pillar": true, "tuning": {"level_punches": 7, "mercy_height": 8}}
+	presets.l1 = {"full": true, "pillar": true, "tuning": {"level_punches": 7, "mercy_height": 7, "late_growth": 2}}
+	presets.l2 = {"full": true, "pillar": true, "tuning": {"level_punches": 7, "mercy_height": 8, "late_growth": 2}}
+	presets.l3 = {"full": true, "pillar": true, "tuning": {"level_punches": 8, "mercy_height": 7, "late_growth": 3}}
+	presets.l4 = {"full": true, "pillar": true, "tuning": {"level_punches": 7, "mercy_height": 7, "late_growth": 3}}
+	# Board-size trials, all on the shipped l3 balance.
+	for size in [Vector2i(7, 9), Vector2i(7, 8), Vector2i(6, 9), Vector2i(6, 8), Vector2i(8, 8), Vector2i(6, 10)]:
+		presets["b%dx%d" % [size.x, size.y]] = {"full": true, "pillar": true, "width": size.x, "height": size.y, "tuning": {}}
 	presets.v10_soft = {"full": true, "pillar": true, "tuning": {"plain": [6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 20, 22, 24]}}
 	presets.v10_hard = {"full": true, "pillar": true, "tuning": {"plain": [8, 9, 11, 12, 13, 14, 16, 17, 18, 20, 22, 24]}}
 	presets.v8 = {"full": false, "tuning": {}}
@@ -82,6 +98,8 @@ func define_presets() -> void:
 			ratios.append(start + .04 * mini(level - 1, 10) + .02 * maxi(0, level - 11))
 		presets["c%d" % int(start * 10)] = {"full": true, "pillar": true, "tuning": {"intervals": gentle, "ratios": ratios, "refund": refund}}
 
+var default_size := Vector2i(BoardManager.WIDTH, BoardManager.HEIGHT)
+
 func run() -> void:
 	define_presets()
 	var chosen: Array = []
@@ -106,6 +124,8 @@ func run() -> void:
 		CutterManager.full_footprint = preset.full
 		CutterManager.shape_count = 4 if preset.get("pillar", false) else 3
 		SupplySystem.tuning = preset.tuning
+		BoardManager.WIDTH = preset.get("width", default_size.x)
+		BoardManager.HEIGHT = preset.get("height", default_size.y)
 		for profile in policies:
 			report(name, profile, await cohort(profile))
 	CutterManager.full_footprint = false
@@ -172,6 +192,16 @@ func session(profile: Dictionary, seed_value: int, choice_seed: int) -> Dictiona
 					chosen = action
 		data.history.append(model.board.occupied())
 		var events := model.play(chosen.slot, chosen.origin)
+		# Tension proxy: moves spent within two rows of the ceiling, and
+		# escapes from one row away back to a comfortable stack.
+		var tallest := SupplySystem.tallest(model.board)
+		if tallest >= BoardManager.HEIGHT - 2:
+			data.danger = data.get("danger", 0) + 1
+		if tallest >= BoardManager.HEIGHT - 1:
+			data.brink = true
+		elif tallest <= BoardManager.HEIGHT - 3 and data.get("brink", false):
+			data.brink = false
+			data.escapes = data.get("escapes", 0) + 1
 		for event in events:
 			if event.type == "pop" and event.source in ["cut", "player"]:
 				data.removed += event.points.size()
@@ -220,7 +250,7 @@ func evaluate(model: RoundModel, action: Dictionary, height_aware: bool) -> floa
 		var tallest := 0
 		var roughness := 0
 		var previous := 0
-		for x in 7:
+		for x in BoardManager.WIDTH:
 			var h := SupplySystem.height(trial, x)
 			tallest = maxi(tallest, h)
 			if x > 0:
@@ -250,7 +280,10 @@ func report(name: String, profile: Dictionary, sessions: Array) -> void:
 	var rows := 0
 	var arrived := 0
 	var total := 0
+	var danger := 0
+	var escapes := sessions.map(func(s: Dictionary) -> int: return s.get("escapes", 0))
 	for s in sessions:
+		danger += s.get("danger", 0)
 		fresh += s.fresh
 		chains += s.chains
 		matches += s.matches
@@ -280,4 +313,5 @@ func report(name: String, profile: Dictionary, sessions: Array) -> void:
 		if fills.size() * 2 < sessions.size():
 			break
 		curve.append("%d:%s" % [at, pct(fills, .5)])
+	print("%-14s %-13s danger%% %.0f escapes p50/p90 %s/%s" % [name, "%s@%s" % [profile.policy, profile.think], 100.0 * danger / maxi(1, total), pct(escapes, .5), pct(escapes, .9)])
 	print("%-14s %-13s moves p10/50/90 %s/%s/%s  min %s  lvl %s streak %s score %s  cap %d/%d  fresh %.1f  match%% %.0f chain%% %.1f  out/move %.2f arrive/move %.2f rows/move %.2f  fill %s  pre-death fill -30/-15/-5 %s/%s/%s %s" % [name, "%s@%s" % [profile.policy, profile.think], pct(moves, .1), pct(moves, .5), pct(moves, .9), pct(minutes, .5), pct(levels, .5), pct(streaks, .5), pct(scores, .5), capped, sessions.size(), float(fresh) / sessions.size(), 100.0 * matches / maxi(1, total), 100.0 * chains / maxi(1, total), float(removed) / maxi(1, total), float(arrived) / maxi(1, total), float(rows) / maxi(1, total), " ".join(curve), pct(tail[30], .5), pct(tail[15], .5), pct(tail[5], .5), reasons])
